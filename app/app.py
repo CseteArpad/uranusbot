@@ -920,6 +920,9 @@ def read_trading_settings():
         "ma_filter_enabled": True,
         "ma_period": 20,
         "ma_sideways_band_pct": 0.05,
+
+        "shadow_enabled": False,
+        "shadow_start_equity_usdc": 0.0,
     }
 
     try:
@@ -990,6 +993,10 @@ def read_trading_settings():
                     cfg["daily_loss_cap_pct"] = float(line.split("=", 2)[2])
                 elif line.startswith("Environment=FT_URL="):
                     cfg["ft_url"] = line.split("=", 2)[2]
+                elif line.startswith("Environment=SHADOW_ENABLED="):
+                    cfg["shadow_enabled"] = env_to_bool(line.split("=", 2)[2])
+                elif line.startswith("Environment=SHADOW_START_EQUITY_USDC="):
+                    cfg["shadow_start_equity_usdc"] = float(line.split("=", 2)[2])
     except Exception:
         pass
 
@@ -1033,6 +1040,9 @@ Environment=KILL_SWITCH={bool_to_env(data['kill_switch'])}
 Environment=MAX_TRADES_PER_DAY={data['max_trades_per_day']}
 Environment=DAILY_LOSS_CAP_PCT={data['daily_loss_cap_pct']}
 Environment=FT_URL={data['ft_url']}
+
+Environment=SHADOW_ENABLED={bool_to_env(data.get('shadow_enabled', False))}
+Environment=SHADOW_START_EQUITY_USDC={float(data.get('shadow_start_equity_usdc', 0.0))}
 """
 
     with open(SETTINGS_ENV_FILE, "w", encoding="utf-8") as f:
@@ -1337,6 +1347,25 @@ def api_save_settings():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+
+
+@app.route("/api/shadow", methods=["GET"])
+def api_get_shadow():
+    try:
+        with open(STATE_PATH, "r", encoding="utf-8") as f:
+            state = json.load(f)
+    except Exception:
+        state = {}
+
+    shadow = state.get("shadow") if isinstance(state.get("shadow"), dict) else {}
+
+    # Truncate ledger to 20 newest for the API response (full ledger stays in state.json)
+    ledger = shadow.get("ledger", [])
+    if isinstance(ledger, list) and len(ledger) > 20:
+        shadow = dict(shadow)
+        shadow["ledger"] = ledger[-20:]
+
+    return jsonify({"ok": True, "shadow": shadow})
 
 
 @app.route("/api/rules", methods=["GET"])

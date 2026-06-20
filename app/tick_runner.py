@@ -41,6 +41,7 @@ FT_USERNAME = os.getenv("FT_USERNAME", "").strip()
 FT_PASSWORD = os.getenv("FT_PASSWORD", "").strip()
 
 EXECUTION_ENABLED = os.getenv("EXECUTION_ENABLED", "0") == "1"
+SHADOW_ENABLED = os.getenv("SHADOW_ENABLED", "0") == "1"
 EXECUTION_CONFIRM = os.getenv("EXECUTION_CONFIRM", "1") == "1"
 EXECUTION_LOG_ONLY = os.getenv("EXECUTION_LOG_ONLY", "1") == "1"
 
@@ -114,6 +115,10 @@ def _runtime_exec_flags() -> tuple[bool, bool, bool]:
     log_only = _env_bool("EXECUTION_LOG_ONLY", True)
     confirm = _env_bool("EXECUTION_CONFIRM", True)
     return enabled, log_only, confirm
+
+
+def _runtime_shadow_enabled() -> bool:
+    return _env_bool("SHADOW_ENABLED", False)
 
 
 def _read_state() -> dict:
@@ -481,6 +486,15 @@ def sync_position_from_freqtrade(state: dict, pair: str) -> None:
             trade_id = trade.get("trade_id")
             state["active_trade_id"] = trade_id
 
+            # Store live trade stake for shadow engine (so it mirrors real position size)
+            live_stake = _as_float(trade.get("stake_amount"))
+            if live_stake is None or live_stake <= 0:
+                open_r = _as_float(trade.get("open_rate") or trade.get("open_rate_requested"))
+                amt = _as_float(trade.get("amount"))
+                if open_r is not None and amt is not None and open_r > 0 and amt > 0:
+                    live_stake = open_r * amt
+            state["live_trade_stake"] = live_stake if (live_stake is not None and live_stake > 0) else None
+
             open_rate = _as_float(trade.get("open_rate"))
             if open_rate is None:
                 open_rate = _as_float(trade.get("open_rate_requested"))
@@ -522,6 +536,7 @@ def sync_position_from_freqtrade(state: dict, pair: str) -> None:
 
         else:
             state["active_trade_id"] = None
+            state["live_trade_stake"] = None
 
             if prev_in_position:
                 _set_buy_cooldown(
@@ -1430,6 +1445,7 @@ def refresh_exec_flags_every_tick(state: dict) -> None:
     execs["flags_ts"] = int(time.time())
     execs["ft_url"] = FT_URL
     execs["pair"] = os.getenv("PAIR", PAIR)
+    execs["shadow_enabled"] = _runtime_shadow_enabled()
 
 def sell_execution_profit_guard(state: dict, decision: dict) -> tuple[bool, str]:
     """
@@ -1622,6 +1638,10 @@ def run_once() -> tuple[bool, float | None, dict]:
 
         execs = _ensure_exec_section(state)
         execs["ft_url"] = FT_URL
+
+        if _runtime_shadow_enabled():
+            from shadow_position import maybe_run_shadow_tick
+            maybe_run_shadow_tick(state)
 
         _write_state(state)
         return True, last_close, decision
