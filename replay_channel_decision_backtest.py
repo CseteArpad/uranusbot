@@ -122,6 +122,45 @@ def _compute_cp(close: float, ch: Optional[dict]) -> Optional[float]:
         return None
 
 
+def _channel_bounds_by_tf(
+    close: float,
+    tf_config: List[dict],
+    ch_caches: Dict[str, Dict[int, dict]],
+    bar_ms: Dict[str, int],
+    ts_ms: int,
+) -> Dict[str, Optional[dict]]:
+    """
+    For each TF return {"lower": ..., "upper": ..., "width": ..., "cp": ...}
+    or None when no valid channel exists for that bar.
+    """
+    result: Dict[str, Optional[dict]] = {}
+    for tfc in tf_config:
+        tf_name = tfc["name"]
+        bms     = bar_ms[tf_name]
+        bar_ts  = (ts_ms // bms) * bms
+        ch      = ch_caches[tf_name].get(bar_ts)
+        if not ch or not ch.get("valid"):
+            result[tf_name] = None
+            continue
+        n = ch["n_bars"]
+        if n == 0:
+            result[tf_name] = None
+            continue
+        lo, up = ce.evaluate_channel_at(ch, n - 1)
+        try:
+            cp = ce.channel_position(close, lo, up)
+        except ValueError:
+            result[tf_name] = None
+            continue
+        result[tf_name] = {
+            "lower": _r(lo, 6),
+            "upper": _r(up, 6),
+            "width": _r(up - lo, 6),
+            "cp":    _r(cp, 4),
+        }
+    return result
+
+
 def _cpagg(cp_vals: Dict[str, Optional[float]]) -> Optional[float]:
     wsum = wtot = 0.0
     for tf, cp in cp_vals.items():
@@ -267,6 +306,13 @@ def run(
         "PANIC_BUY": 0,    "PANIC_SELL": 0,
         "HOLD": 0,
     }
+    TFS = [tfc["name"] for tfc in tf_config]
+    boundary_counts: Dict[str, Dict[str, int]] = {
+        "entry_above": {tf: 0 for tf in TFS},
+        "entry_below": {tf: 0 for tf in TFS},
+        "exit_above":  {tf: 0 for tf in TFS},
+        "exit_below":  {tf: 0 for tf in TFS},
+    }
 
     # Equity curve for drawdown
     equity_curve: List[float] = []
@@ -297,6 +343,9 @@ def run(
         tscore = cte.compute_trend_score(eff_cp.get("4H"), eff_cp.get("12H"))
         trend  = cte.compute_trend_state(eff_cp.get("4H"), eff_cp.get("12H"))
 
+        # Channel bounds (lower / upper / width / cp) per TF at this tick
+        bounds = _channel_bounds_by_tf(close, tf_config, ch_caches, bar_ms, ts_ms)
+
         # Decision
         dec = cde.evaluate(
             position_state=pos_state,
@@ -315,7 +364,15 @@ def run(
             xrp_held      = xrp_in
             usdc_equity   = 0.0
             pos_state     = cde.POSITION_IN_POSITION
-            entry_snapshot = _snapshot(ts_utc, close, agg, tscore, trend, dec, raw_cp, eff_cp)
+            entry_snapshot = _snapshot(ts_utc, close, agg, tscore, trend, dec,
+                                       raw_cp, eff_cp, bounds)
+            # boundary counters at entry
+            for tf_name, b in bounds.items():
+                if b is not None:
+                    if close > b["upper"]:
+                        boundary_counts["entry_above"][tf_name] += 1
+                    elif close < b["lower"]:
+                        boundary_counts["entry_below"][tf_name] += 1
             action_counts["BUY"]    += 1
             action_counts[dec.rule] += 1
             if verbose:
@@ -327,7 +384,15 @@ def run(
             net_pnl_usdc  = usdc_out - entry_usdc
             pnl_pct       = net_pnl_usdc / entry_usdc * 100.0
             hold_secs     = (ts_ms - _ts_to_ms(entry_ts)) / 1000.0
-            exit_snapshot = _snapshot(ts_utc, close, agg, tscore, trend, dec, raw_cp, eff_cp)
+            exit_snapshot = _snapshot(ts_utc, close, agg, tscore, trend, dec,
+                                      raw_cp, eff_cp, bounds)
+            # boundary counters at exit
+            for tf_name, b in bounds.items():
+                if b is not None:
+                    if close > b["upper"]:
+                        boundary_counts["exit_above"][tf_name] += 1
+                    elif close < b["lower"]:
+                        boundary_counts["exit_below"][tf_name] += 1
             trades.append({
                 "trade_num":    len(trades) + 1,
                 # core accounting
@@ -358,10 +423,13 @@ def run(
                 "entry_decision_reason":  entry_snapshot["decision_reason"],
                 "exit_decision_reason":   exit_snapshot["decision_reason"],
                 # full CP dicts
-                "entry_raw_cp_by_tf":      entry_snapshot["raw_cp_by_tf"],
-                "exit_raw_cp_by_tf":       exit_snapshot["raw_cp_by_tf"],
+                "entry_raw_cp_by_tf":       entry_snapshot["raw_cp_by_tf"],
+                "exit_raw_cp_by_tf":        exit_snapshot["raw_cp_by_tf"],
                 "entry_effective_cp_by_tf": entry_snapshot["effective_cp_by_tf"],
                 "exit_effective_cp_by_tf":  exit_snapshot["effective_cp_by_tf"],
+                # channel boundary dicts
+                "entry_channel_bounds_by_tf": entry_snapshot["channel_bounds_by_tf"],
+                "exit_channel_bounds_by_tf":  exit_snapshot["channel_bounds_by_tf"],
             })
             usdc_equity = usdc_out
             xrp_held    = 0.0
@@ -485,6 +553,11 @@ def run(
             "PANIC_SELL_COUNT":    action_counts["PANIC_SELL"],
             "HOLD_COUNT":          action_counts["HOLD"],
             "sequence_validation": "PASS" if seq_ok else "FAIL",
+            # channel boundary counters per TF
+            "entry_above_channel": boundary_counts["entry_above"],
+            "entry_below_channel": boundary_counts["entry_below"],
+            "exit_above_channel":  boundary_counts["exit_above"],
+            "exit_below_channel":  boundary_counts["exit_below"],
         },
         "last_tick": last_tick,
         "trades_first_20": [_round_trade(t) for t in closed[:20]],
@@ -535,6 +608,7 @@ def _snapshot(
     dec,
     raw_cp: Dict[str, Optional[float]],
     eff_cp: Dict[str, Optional[float]],
+    channel_bounds: Dict[str, Optional[dict]],
 ) -> dict:
     """Capture a complete tick context for entry/exit audit."""
     return {
@@ -552,6 +626,7 @@ def _snapshot(
         "effective_cp_by_tf": {
             tf: _r(eff_cp.get(tf)) for tf in ("1H", "4H", "12H", "1D")
         },
+        "channel_bounds_by_tf": channel_bounds,
     }
 
 
@@ -651,8 +726,18 @@ def _write_txt(path: str, result: dict) -> None:
         "",
     ]
 
+    def _bounds_str(bounds_by_tf: Optional[dict], tf: str) -> str:
+        if not bounds_by_tf:
+            return "N/A"
+        b = bounds_by_tf.get(tf)
+        if not b:
+            return "N/A"
+        return f"{b['lower']:.6f}–{b['upper']:.6f} (cp={b['cp']})"
+
     def _trade_block(t: dict) -> List[str]:
-        hold = _fmt_duration(t.get("hold_secs", 0))
+        hold  = _fmt_duration(t.get("hold_secs", 0))
+        en_b  = t.get("entry_channel_bounds_by_tf") or {}
+        ex_b  = t.get("exit_channel_bounds_by_tf")  or {}
         return [
             f"  #{t['trade_num']:>3d}  entry={t['entry_ts']}  exit={t['exit_ts']}",
             f"       price  : {t['entry_price']:.6f} → {t['exit_price']:.6f}",
@@ -663,6 +748,36 @@ def _write_txt(path: str, result: dict) -> None:
             f"       rule   : {t.get('entry_rule')} → {t.get('exit_rule')}",
             f"       reason : {t.get('entry_decision_reason')}",
             f"             → {t.get('exit_decision_reason')}",
+            f"       bounds entry:",
+            f"         1H   : {_bounds_str(en_b, '1H')}",
+            f"         4H   : {_bounds_str(en_b, '4H')}",
+            f"         12H  : {_bounds_str(en_b, '12H')}",
+            f"         1D   : {_bounds_str(en_b, '1D')}",
+            f"       bounds exit:",
+            f"         1H   : {_bounds_str(ex_b, '1H')}",
+            f"         4H   : {_bounds_str(ex_b, '4H')}",
+            f"         12H  : {_bounds_str(ex_b, '12H')}",
+            f"         1D   : {_bounds_str(ex_b, '1D')}",
+        ]
+
+    # Channel boundary summary table
+    ea = s.get("entry_above_channel", {})
+    eb = s.get("entry_below_channel", {})
+    xa = s.get("exit_above_channel",  {})
+    xb = s.get("exit_below_channel",  {})
+    tf_names = list(ea.keys()) if ea else []
+    if tf_names:
+        hdr = "".join(f"{tf:>6s}" for tf in tf_names)
+        lines += [
+            "-" * W,
+            "  Channel boundary counters (trades only)",
+            "-" * W,
+            f"  {'':22s}{hdr}",
+            f"  {'entry_above_channel':22s}" + "".join(f"{ea.get(tf, 0):>6d}" for tf in tf_names),
+            f"  {'entry_below_channel':22s}" + "".join(f"{eb.get(tf, 0):>6d}" for tf in tf_names),
+            f"  {'exit_above_channel':22s}"  + "".join(f"{xa.get(tf, 0):>6d}" for tf in tf_names),
+            f"  {'exit_below_channel':22s}"  + "".join(f"{xb.get(tf, 0):>6d}" for tf in tf_names),
+            "",
         ]
 
     first20 = result.get("trades_first_20", [])
