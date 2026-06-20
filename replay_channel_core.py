@@ -17,6 +17,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, str(Path(__file__).parent / "app"))
 import channel_engine as ce
 import channel_trend_engine as cte
+import channel_state_engine as cse
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -314,12 +315,23 @@ def _write_txt(path: str, result: dict) -> None:
     # Last computed values
     lines += [
         "-" * W,
-        "  Last computed values",
+        "  Last computed values (effective = last-valid fallback)",
         "-" * W,
-        f"  CP_1H        = {_pct(summ['last_cp_1h'])}",
-        f"  CP_4H        = {_pct(summ['last_cp_4h'])}",
-        f"  CP_12H       = {_pct(summ['last_cp_12h'])}",
-        f"  CP_1D        = {_pct(summ['last_cp_1d'])}   (informational)",
+        f"  {'':8s}{'Raw CP':>10s}  {'Eff CP':>10s}  {'Fallback ticks':>14s}  {'Final stale':>11s}",
+    ]
+    for tf in tf_names:
+        raw_key  = f"last_raw_cp_{tf.lower()}"
+        eff_key  = f"last_cp_{tf.lower()}"
+        fb_key   = f"fallback_count_{tf}"
+        st_key   = f"final_stale_ticks_{tf}"
+        raw_v    = _pct(summ.get(raw_key))
+        eff_v    = _pct(summ.get(eff_key))
+        fb_v     = summ.get(fb_key, 0)
+        st_v     = summ.get(st_key, 0)
+        lines.append(
+            f"  {tf:<6s}  {raw_v:>10s}  {eff_v:>10s}  {fb_v:>14d}  {st_v:>11d}"
+        )
+    lines += [
         f"  CPagg        = {_pct(summ['last_cpagg'])}",
         f"  TrendScore   = {_pct(summ['last_trend_score'])}   (0.4*CP_4H + 0.6*CP_12H)",
         f"  TrendState   = {summ['last_trend_state'] or 'N/A'}",
@@ -417,38 +429,60 @@ def run(tf_config: List[dict] = None, replay_days: int = DEFAULT_REPLAY_DAYS) ->
     bar_ms: Dict[str, int] = {tfc["name"]: tfc["minutes"] * 60 * 1000 for tfc in tf_config}
 
     # Replay
-    cp_valid_ticks: Dict[str, int] = {tfc["name"]: 0 for tfc in tf_config}
-    rows:   List[dict] = []
+    cp_valid_ticks:  Dict[str, int] = {tfc["name"]: 0 for tfc in tf_config}
+    fallback_counts: Dict[str, int] = {tfc["name"]: 0 for tfc in tf_config}
+    rows:     List[dict] = []
     last_row: Optional[dict] = None
+
+    ch_state = cse.ChannelState()   # last-valid CP state across ticks
 
     print(f"\nReplaying {len(replay)} candles ...")
     for i, candle in enumerate(replay):
-        ts_ms = int(candle[0])
-        close = float(candle[4])
+        ts_ms  = int(candle[0])
+        close  = float(candle[4])
+        ts_utc = _fmt_ts(ts_ms)
 
-        cp_vals: Dict[str, Optional[float]] = {}
+        # 1. Raw CP from the channel cache (may be None if no valid channel)
+        raw_cp: Dict[str, Optional[float]] = {}
         for tfc in tf_config:
             tf_name = tfc["name"]
             bms     = bar_ms[tf_name]
             bar_ts  = (ts_ms // bms) * bms
             ch      = ch_caches[tf_name].get(bar_ts)
             cp      = _compute_cp(close, ch)
-            cp_vals[tf_name] = cp
+            raw_cp[tf_name] = cp
             if cp is not None:
                 cp_valid_ticks[tf_name] += 1
 
-        agg    = _cpagg(cp_vals)
-        tscore = cte.compute_trend_score(cp_vals.get("4H"), cp_vals.get("12H"))
-        trend  = cte.compute_trend_state(cp_vals.get("4H"), cp_vals.get("12H"))
+        # 2. Update last-valid state; get effective (last-valid fallback) CPs
+        cse.update_channel_state(ch_state, ts_utc, raw_cp)
+        eff_cp = cse.effective_cp_by_tf(ch_state)
+
+        # 3. Count ticks that used a last-valid fallback (raw None, eff not None)
+        for tfc in tf_config:
+            tf_name = tfc["name"]
+            if raw_cp[tf_name] is None and eff_cp.get(tf_name) is not None:
+                fallback_counts[tf_name] += 1
+
+        # 4. Derive trend / action from EFFECTIVE CPs (avoids UNKNOWN during gaps)
+        agg    = _cpagg(eff_cp)
+        tscore = cte.compute_trend_score(eff_cp.get("4H"), eff_cp.get("12H"))
+        trend  = cte.compute_trend_state(eff_cp.get("4H"), eff_cp.get("12H"))
         action = cte.compute_candidate_action(agg)
 
         row = {
             "ts_ms":            ts_ms,
-            "ts_utc":           _fmt_ts(ts_ms),
-            "cp_1h":            _r(cp_vals.get("1H")),
-            "cp_4h":            _r(cp_vals.get("4H")),
-            "cp_12h":           _r(cp_vals.get("12H")),
-            "cp_1d":            _r(cp_vals.get("1D")),
+            "ts_utc":           ts_utc,
+            # raw CP (direct channel engine output; None when no valid channel)
+            "raw_cp_1h":        _r(raw_cp.get("1H")),
+            "raw_cp_4h":        _r(raw_cp.get("4H")),
+            "raw_cp_12h":       _r(raw_cp.get("12H")),
+            "raw_cp_1d":        _r(raw_cp.get("1D")),
+            # effective CP (last-valid fallback applied)
+            "cp_1h":            _r(eff_cp.get("1H")),
+            "cp_4h":            _r(eff_cp.get("4H")),
+            "cp_12h":           _r(eff_cp.get("12H")),
+            "cp_1d":            _r(eff_cp.get("1D")),
             "cpagg":            _r(agg),
             "trend_score":      _r(tscore),
             "trend_state":      trend,
@@ -461,6 +495,7 @@ def run(tf_config: List[dict] = None, replay_days: int = DEFAULT_REPLAY_DAYS) ->
             print(f"  ... {i + 1}/{len(replay)} ticks  CPagg={_r(agg)}  {action}")
 
     print(f"  Replay complete. {len(rows)} rows.")
+    final_stale = cse.staleness_by_tf(ch_state)
 
     n_rows = len(rows)
 
@@ -506,14 +541,23 @@ def run(tf_config: List[dict] = None, replay_days: int = DEFAULT_REPLAY_DAYS) ->
             **{f"cp_valid_ticks_{tfc['name']}": cp_valid_ticks[tfc["name"]] for tfc in tf_config},
             **{f"channel_build_invalid_{tfc['name']}":
                sum(tf_stats[tfc["name"]]["invalid_reasons"].values()) for tfc in tf_config},
+            # effective CP (last-valid fallback applied)
             "last_cp_1h":            last_row["cp_1h"]            if last_row else None,
             "last_cp_4h":            last_row["cp_4h"]            if last_row else None,
             "last_cp_12h":           last_row["cp_12h"]           if last_row else None,
             "last_cp_1d":            last_row["cp_1d"]            if last_row else None,
+            # raw CP at last tick
+            "last_raw_cp_1h":        last_row["raw_cp_1h"]        if last_row else None,
+            "last_raw_cp_4h":        last_row["raw_cp_4h"]        if last_row else None,
+            "last_raw_cp_12h":       last_row["raw_cp_12h"]       if last_row else None,
+            "last_raw_cp_1d":        last_row["raw_cp_1d"]        if last_row else None,
             "last_cpagg":            last_row["cpagg"]            if last_row else None,
             "last_trend_score":      last_row["trend_score"]      if last_row else None,
             "last_trend_state":      last_row["trend_state"]      if last_row else None,
             "last_candidate_action": last_row["candidate_action"] if last_row else None,
+            # fallback stats
+            **{f"fallback_count_{tfc['name']}": fallback_counts[tfc["name"]] for tfc in tf_config},
+            **{f"final_stale_ticks_{tfc['name']}": final_stale[tfc["name"]] for tfc in tf_config},
         },
         "invalid_reasons_by_timeframe": {
             tfc["name"]: dict(tf_stats[tfc["name"]]["invalid_reasons"]) for tfc in tf_config
@@ -565,6 +609,15 @@ def main(argv=None) -> None:
     print(f"  Last TrendScore = {s['last_trend_score']}  (0.4*CP_4H + 0.6*CP_12H)")
     print(f"  Last TrendState = {s['last_trend_state']}")
     print(f"  Last Action     = {s['last_candidate_action']}")
+
+    print("\n  Fallback statistics (last-valid CP used when raw CP is None):")
+    for tfc in tf_config:
+        tf  = tfc["name"]
+        fb  = s.get(f"fallback_count_{tf}", 0)
+        stl = s.get(f"final_stale_ticks_{tf}", 0)
+        total = s["candles_1m_processed"]
+        pct   = 100.0 * fb / total if total else 0.0
+        print(f"    {tf:>4s}  fallback_ticks={fb:>7d} ({pct:5.1f}%)  final_stale={stl}")
 
     non_zero = {
         reason: {tf: inv_by[tf].get(reason, 0) for tf in dbg_by}
