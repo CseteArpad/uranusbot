@@ -16,6 +16,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 sys.path.insert(0, str(Path(__file__).parent / "app"))
 import channel_engine as ce
+import channel_trend_engine as cte
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -37,8 +38,8 @@ DEFAULT_TF_CONFIG: List[dict] = [
 
 WEIGHTS: Dict[str, float] = {"1H": 0.10, "4H": 0.20, "12H": 0.30, "1D": 0.40}
 
-BUY_ZONE_THRESHOLD  = 0.20
-SELL_ZONE_THRESHOLD = 0.80
+# CPagg thresholds are defined in channel_trend_engine; mirrored here for _cpagg
+# (CandidateAction and TrendState are now computed by channel_trend_engine)
 
 
 # ---------------------------------------------------------------------------
@@ -202,28 +203,6 @@ def _cpagg(cp_vals: Dict[str, Optional[float]]) -> Optional[float]:
     return wsum / wtot if wtot > 0 else None
 
 
-def _trend_state(cp_vals: Dict[str, Optional[float]]) -> Optional[str]:
-    cp_12h = cp_vals.get("12H")
-    cp_1d  = cp_vals.get("1D")
-    if cp_12h is None or cp_1d is None:
-        return None
-    if cp_12h > 0.5 and cp_1d > 0.5:
-        return "LONG"
-    if cp_12h < 0.5 and cp_1d < 0.5:
-        return "SHORT"
-    return "SIDEWAYS"
-
-
-def _candidate_action(cpagg_val: Optional[float]) -> Optional[str]:
-    if cpagg_val is None:
-        return None
-    if cpagg_val <= BUY_ZONE_THRESHOLD:
-        return "BUY_ZONE"
-    if cpagg_val >= SELL_ZONE_THRESHOLD:
-        return "SELL_ZONE"
-    return "HOLD_ZONE"
-
-
 def _fmt_ts(ts_ms: int) -> str:
     return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -256,7 +235,7 @@ def _write_txt(path: str, result: dict) -> None:
     W = 76
     lines = [
         "=" * W,
-        "  Uranus Channel Core — FÁZIS 1B Replay",
+        "  Uranus Channel Core — FÁZIS 2 Replay",
         "=" * W,
         "",
         f"  Candle file   : {cfg['candle_path']}",
@@ -336,13 +315,14 @@ def _write_txt(path: str, result: dict) -> None:
         "-" * W,
         "  Last computed values",
         "-" * W,
-        f"  CP_1H   = {_pct(summ['last_cp_1h'])}",
-        f"  CP_4H   = {_pct(summ['last_cp_4h'])}",
-        f"  CP_12H  = {_pct(summ['last_cp_12h'])}",
-        f"  CP_1D   = {_pct(summ['last_cp_1d'])}",
-        f"  CPagg   = {_pct(summ['last_cpagg'])}",
-        f"  Trend   = {summ['last_trend_state'] or 'N/A'}",
-        f"  Action  = {summ['last_candidate_action'] or 'N/A'}",
+        f"  CP_1H        = {_pct(summ['last_cp_1h'])}",
+        f"  CP_4H        = {_pct(summ['last_cp_4h'])}",
+        f"  CP_12H       = {_pct(summ['last_cp_12h'])}",
+        f"  CP_1D        = {_pct(summ['last_cp_1d'])}   (informational)",
+        f"  CPagg        = {_pct(summ['last_cpagg'])}",
+        f"  TrendScore   = {_pct(summ['last_trend_score'])}   (0.4*CP_4H + 0.6*CP_12H)",
+        f"  TrendState   = {summ['last_trend_state'] or 'N/A'}",
+        f"  Action       = {summ['last_candidate_action'] or 'N/A'}",
         "",
     ]
 
@@ -354,14 +334,14 @@ def _write_txt(path: str, result: dict) -> None:
             f"  {r['ts_utc']}  "
             f"{_fv(r['cp_1h'])}  {_fv(r['cp_4h'])}  "
             f"{_fv(r['cp_12h'])}  {_fv(r['cp_1d'])}  "
-            f"{_fv(r['cpagg'])}  "
-            f"{(r['trend_state'] or 'N/A'):>10s}  "
-            f"{(r['candidate_action'] or 'N/A'):>10s}"
+            f"{_fv(r['cpagg'])}  {_fv(r['trend_score'])}  "
+            f"{r['trend_state']:>9s}  "
+            f"{r['candidate_action']:>9s}"
         )
 
     header = (
-        "  ts_utc                  CP_1H    CP_4H   CP_12H    CP_1D    CPagg"
-        "       TREND      ACTION"
+        "  ts_utc                  CP_1H    CP_4H   CP_12H    CP_1D"
+        "    CPagg   TSCORE  TREND_ST  CAND_ACT"
     )
 
     first20 = result.get("cp_rows_first_20", [])
@@ -457,8 +437,9 @@ def run(tf_config: List[dict] = None, replay_days: int = DEFAULT_REPLAY_DAYS) ->
                 cp_valid_ticks[tf_name] += 1
 
         agg    = _cpagg(cp_vals)
-        trend  = _trend_state(cp_vals)
-        action = _candidate_action(agg)
+        tscore = cte.compute_trend_score(cp_vals.get("4H"), cp_vals.get("12H"))
+        trend  = cte.compute_trend_state(cp_vals.get("4H"), cp_vals.get("12H"))
+        action = cte.compute_candidate_action(agg)
 
         row = {
             "ts_ms":            ts_ms,
@@ -468,6 +449,7 @@ def run(tf_config: List[dict] = None, replay_days: int = DEFAULT_REPLAY_DAYS) ->
             "cp_12h":           _r(cp_vals.get("12H")),
             "cp_1d":            _r(cp_vals.get("1D")),
             "cpagg":            _r(agg),
+            "trend_score":      _r(tscore),
             "trend_state":      trend,
             "candidate_action": action,
         }
@@ -528,6 +510,7 @@ def run(tf_config: List[dict] = None, replay_days: int = DEFAULT_REPLAY_DAYS) ->
             "last_cp_12h":           last_row["cp_12h"]           if last_row else None,
             "last_cp_1d":            last_row["cp_1d"]            if last_row else None,
             "last_cpagg":            last_row["cpagg"]            if last_row else None,
+            "last_trend_score":      last_row["trend_score"]      if last_row else None,
             "last_trend_state":      last_row["trend_state"]      if last_row else None,
             "last_candidate_action": last_row["candidate_action"] if last_row else None,
         },
@@ -547,8 +530,8 @@ def main(argv=None) -> None:
     tf_config = _apply_overrides([dict(tfc) for tfc in DEFAULT_TF_CONFIG], args)
 
     os.makedirs(REPORTS_DIR, exist_ok=True)
-    json_path = os.path.join(REPORTS_DIR, "channel_core_xrp_30d.json")
-    txt_path  = os.path.join(REPORTS_DIR, "channel_core_xrp_30d.txt")
+    json_path = os.path.join(REPORTS_DIR, f"channel_core_xrp_{args.days}d.json")
+    txt_path  = os.path.join(REPORTS_DIR, f"channel_core_xrp_{args.days}d.txt")
 
     result = run(tf_config=tf_config, replay_days=args.days)
 
@@ -577,9 +560,10 @@ def main(argv=None) -> None:
             f"pl={d['last_pivot_low_count']}  ph={d['last_pivot_high_count']}"
         )
 
-    print(f"\n  Last CPagg  = {s['last_cpagg']}")
-    print(f"  Last Trend  = {s['last_trend_state']}")
-    print(f"  Last Action = {s['last_candidate_action']}")
+    print(f"\n  Last CPagg      = {s['last_cpagg']}")
+    print(f"  Last TrendScore = {s['last_trend_score']}  (0.4*CP_4H + 0.6*CP_12H)")
+    print(f"  Last TrendState = {s['last_trend_state']}")
+    print(f"  Last Action     = {s['last_candidate_action']}")
 
     non_zero = {
         reason: {tf: inv_by[tf].get(reason, 0) for tf in dbg_by}
