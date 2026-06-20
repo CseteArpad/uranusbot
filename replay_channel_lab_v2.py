@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-replay_channel_lab_v2.py -- Uranus Channel Lab V2
+replay_channel_lab_v2.py -- Uranus Channel Lab V2.1
 
 Offline regression-channel strategy research on XRP/USDC 1m historical candles.
 No live bot files modified. No state.json touched. No orders placed.
@@ -418,10 +418,24 @@ def _decide(
     cfg: dict,
 ) -> Tuple[str, str]:
     """
-    Returns (action, rule).
-    action: "BUY" | "SELL" | "HOLD"
-    rule:   "STANDARD_BUY" | "PANIC_BUY" | "STANDARD_SELL" | "PANIC_SELL" | ""
-    PANIC rules have priority over STANDARD rules.
+    V2.1 state machine — strict alternating BUY / SELL sequence.
+
+    STATE = FLAT  (in_position == False)
+        allowed : STANDARD_BUY, PANIC_BUY
+        forbidden: STANDARD_SELL, PANIC_SELL
+
+    STATE = IN_POSITION  (in_position == True)
+        allowed : STANDARD_SELL, PANIC_SELL
+        forbidden: STANDARD_BUY, PANIC_BUY
+
+    channel_position < 0 is explicitly allowed for STANDARD_BUY.
+    cp is None only when the channel band is zero-width; that blocks
+    STANDARD_BUY but PANIC_BUY (price-based) still fires.
+
+    Returns (action, rule):
+        action: "BUY" | "SELL" | "HOLD"
+        rule:   "STANDARD_BUY" | "PANIC_BUY" | "STANDARD_SELL" | "PANIC_SELL" | ""
+    PANIC rules have priority over STANDARD rules within each state.
     """
     in_pos = pos.get("in_position", False)
     cp     = _channel_pos(price, upper, lower)
@@ -431,17 +445,19 @@ def _decide(
     ps_pct = cfg["panic_sell_breakout_pct"]
 
     if not in_pos:
-        # PANIC_BUY: breakout above upper band
+        # --- FLAT: only BUY actions permitted ---
+        # PANIC_BUY: price breaks out above upper band
         if price >= upper * (1.0 + pb_pct):
             return "BUY", "PANIC_BUY"
-        # STANDARD_BUY: price near lower band
+        # STANDARD_BUY: price at or below buy zone (cp < 0 allowed)
         if cp is not None and cp <= buy_z:
             return "BUY", "STANDARD_BUY"
     else:
-        # PANIC_SELL: breakdown below lower band
+        # --- IN_POSITION: only SELL actions permitted ---
+        # PANIC_SELL: price breaks down below lower band
         if price <= lower * (1.0 - ps_pct):
             return "SELL", "PANIC_SELL"
-        # STANDARD_SELL: price near upper band
+        # STANDARD_SELL: price at or above sell zone
         if cp is not None and cp >= (1.0 - sell_z):
             return "SELL", "STANDARD_SELL"
 
@@ -594,6 +610,15 @@ def run_replay(cfg: dict, verbose: bool = False) -> dict:
     equity_curve: List[float] = [start_equity]
     rule_buy_ctr:  Counter    = Counter()
     rule_sell_ctr: Counter    = Counter()
+
+    # V2.1 sequence counters — validated at report end
+    buy_count       = 0
+    sell_count      = 0
+    std_buy_count   = 0
+    std_sell_count  = 0
+    panic_buy_count = 0
+    panic_sell_count = 0
+
     skipped_no_channel = 0
     tick_count         = 0
     t0 = time.monotonic()
@@ -620,6 +645,11 @@ def run_replay(cfg: dict, verbose: bool = False) -> dict:
         if action == "BUY":
             _execute_buy(pos, price, ts_sec, rule, cfg)
             rule_buy_ctr[rule] += 1
+            buy_count += 1
+            if rule == "STANDARD_BUY":
+                std_buy_count += 1
+            else:
+                panic_buy_count += 1
             if verbose:
                 cp = _channel_pos(price, upper, lower)
                 print(
@@ -635,6 +665,11 @@ def run_replay(cfg: dict, verbose: bool = False) -> dict:
                 if trade:
                     ledger.append(trade)
                     rule_sell_ctr[rule] += 1
+                    sell_count += 1
+                    if rule == "STANDARD_SELL":
+                        std_sell_count += 1
+                    else:
+                        panic_sell_count += 1
                     entry = trade
                     if verbose:
                         side = "WIN " if trade["is_win"] else "LOSS"
@@ -654,7 +689,19 @@ def run_replay(cfg: dict, verbose: bool = False) -> dict:
     elapsed = time.monotonic() - t0
     print(
         f"[channel_lab] Done: {tick_count:,} ticks in {elapsed:.2f}s  "
-        f"(skipped {skipped_no_channel:,} — no channel yet)",
+        f"(skipped {skipped_no_channel:,} - no channel yet)",
+        flush=True,
+    )
+
+    # --- V2.1 sequence validation ---
+    # Valid iff every BUY has a matching SELL, with at most one open BUY at end.
+    seq_valid = (buy_count == sell_count) or (buy_count == sell_count + 1)
+    seq_result = "PASS" if seq_valid else "FAIL"
+    print(
+        f"[channel_lab] Sequence validation: {seq_result}  "
+        f"(buys={buy_count} sells={sell_count}  "
+        f"std_buy={std_buy_count} panic_buy={panic_buy_count}  "
+        f"std_sell={std_sell_count} panic_sell={panic_sell_count})",
         flush=True,
     )
 
@@ -717,26 +764,35 @@ def run_replay(cfg: dict, verbose: bool = False) -> dict:
             "ends_in_position":  in_pos_at_end,
         },
         "summary": {
-            "start_equity_usdc":  round(start_equity, 8),
-            "final_equity_usdc":  round(final_eq, 8),
-            "ends_in_position":   in_pos_at_end,
-            "net_pnl_usdc":       round(net_pnl_usdc, 8),
-            "net_pnl_pct":        round(net_pnl_pct, 4),
-            "trade_count":        stats["trade_count"],
-            "win_count":          stats["win_count"],
-            "loss_count":         stats["loss_count"],
-            "win_rate_pct":       round(stats["win_rate_pct"], 2),
-            "avg_net_pnl_usdc":   round(stats["avg_net_pnl_usdc"], 6),
-            "avg_net_pnl_pct":    round(stats["avg_net_pnl_pct"], 4),
-            "avg_duration_sec":   stats["avg_duration_sec"],
-            "avg_duration_str":   _dur_str(stats["avg_duration_sec"]),
-            "largest_win_usdc":   round(stats["largest_win_usdc"], 6),
-            "largest_loss_usdc":  round(stats["largest_loss_usdc"], 6),
-            "largest_win_pct":    round(stats["largest_win_pct"], 4),
-            "largest_loss_pct":   round(stats["largest_loss_pct"], 4),
-            "total_fees_usdc":    round(stats["total_fees_usdc"], 6),
-            "gross_pnl_sum_usdc": round(stats["gross_pnl_sum_usdc"], 6),
-            "max_drawdown_pct":   round(max_dd, 4),
+            "start_equity_usdc":   round(start_equity, 8),
+            "final_equity_usdc":   round(final_eq, 8),
+            "ends_in_position":    in_pos_at_end,
+            "net_pnl_usdc":        round(net_pnl_usdc, 8),
+            "net_pnl_pct":         round(net_pnl_pct, 4),
+            "trade_count":         stats["trade_count"],
+            "win_count":           stats["win_count"],
+            "loss_count":          stats["loss_count"],
+            "win_rate_pct":        round(stats["win_rate_pct"], 2),
+            "avg_net_pnl_usdc":    round(stats["avg_net_pnl_usdc"], 6),
+            "avg_net_pnl_pct":     round(stats["avg_net_pnl_pct"], 4),
+            "avg_duration_sec":    stats["avg_duration_sec"],
+            "avg_duration_str":    _dur_str(stats["avg_duration_sec"]),
+            "largest_win_usdc":    round(stats["largest_win_usdc"], 6),
+            "largest_loss_usdc":   round(stats["largest_loss_usdc"], 6),
+            "largest_win_pct":     round(stats["largest_win_pct"], 4),
+            "largest_loss_pct":    round(stats["largest_loss_pct"], 4),
+            "total_fees_usdc":     round(stats["total_fees_usdc"], 6),
+            "gross_pnl_sum_usdc":  round(stats["gross_pnl_sum_usdc"], 6),
+            "max_drawdown_pct":    round(max_dd, 4),
+            # V2.1 sequence counts
+            "buy_count":           buy_count,
+            "sell_count":          sell_count,
+            "standard_buy_count":  std_buy_count,
+            "standard_sell_count": std_sell_count,
+            "panic_buy_count":     panic_buy_count,
+            "panic_sell_count":    panic_sell_count,
+            "sequence_valid":      seq_valid,
+            "sequence_validation": seq_result,
         },
         "open_position": open_pos_info,
         "rule_distribution": {
@@ -791,7 +847,7 @@ def format_txt_report(result: dict) -> str:
 
     lines: List[str] = [
         "=" * 66,
-        "  Uranus Channel Lab V2 -- Regression Channel Strategy",
+        "  Uranus Channel Lab V2.1 -- Regression Channel Strategy",
         "=" * 66,
         f"  Period       : {rw['first_candle_utc']}  to  {rw['last_candle_utc']}",
         f"  Days         : {c['days']}",
@@ -862,6 +918,21 @@ def format_txt_report(result: dict) -> str:
     if not rd["sell_rules"]:
         lines.append("    (none)")
 
+    seq_flag = "PASS" if s["sequence_valid"] else "FAIL"
+    lines += [
+        "",
+        "  -- V2.1 Sequence Validation ----------------------------------",
+        f"  Result          : {seq_flag}",
+        f"  BUY_COUNT       : {s['buy_count']}",
+        f"  SELL_COUNT      : {s['sell_count']}",
+        f"  STANDARD_BUY    : {s['standard_buy_count']}",
+        f"  STANDARD_SELL   : {s['standard_sell_count']}",
+        f"  PANIC_BUY       : {s['panic_buy_count']}",
+        f"  PANIC_SELL      : {s['panic_sell_count']}",
+        f"  Rule: BUY_COUNT == SELL_COUNT "
+        f"{'(open position)' if s['ends_in_position'] else '(flat)'}",
+    ]
+
     lines += ["", "  -- First 10 Trades -------------------------------------------"]
     for t in result.get("first_10_trades", []):
         lines.extend(_fmt_trade(t))
@@ -924,7 +995,8 @@ def main(argv: Optional[List[str]] = None) -> None:
         f"[result] equity {s['start_equity_usdc']:.4f} to {s['final_equity_usdc']:.4f} USDC{pos_note}  "
         f"PNL={s['net_pnl_pct']:+.4f}%  trades={s['trade_count']}  "
         f"win_rate={s['win_rate_pct']:.1f}%  max_dd={s['max_drawdown_pct']:.2f}%  "
-        f"avg_dur={s['avg_duration_str']}",
+        f"avg_dur={s['avg_duration_str']}  "
+        f"seq={s['sequence_validation']} (B={s['buy_count']} S={s['sell_count']})",
         flush=True,
     )
 
