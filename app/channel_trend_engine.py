@@ -11,6 +11,10 @@ from typing import Optional
 TREND_SCORE_W4H  = 0.4
 TREND_SCORE_W12H = 0.6
 
+# TrendScore thresholds for TrendState classification
+LONG_THRESHOLD  = 0.65
+SHORT_THRESHOLD = 0.35
+
 # CPagg thresholds for candidate action
 BUY_ZONE_THRESHOLD  = 0.20
 SELL_ZONE_THRESHOLD = 0.80
@@ -37,20 +41,21 @@ def compute_trend_state(
     cp_12h: Optional[float],
 ) -> str:
     """
-    Classify trend direction based on 4H and 12H channel positions.
+    Classify trend direction via TrendScore = 0.4*CP_4H + 0.6*CP_12H.
 
     Returns one of: LONG | SHORT | SIDEWAYS | UNKNOWN
 
-    LONG     — CP_4H > 0.50 AND CP_12H > 0.50   (price in upper half of both channels)
-    SHORT    — CP_4H < 0.50 AND CP_12H < 0.50   (price in lower half of both channels)
-    SIDEWAYS — both present but signals diverge
-    UNKNOWN  — one or both CPs are None (insufficient channel data)
+    LONG     — TrendScore >= 0.65
+    SHORT    — TrendScore <= 0.35
+    SIDEWAYS — 0.35 < TrendScore < 0.65
+    UNKNOWN  — either CP is None (TrendScore cannot be computed)
     """
-    if cp_4h is None or cp_12h is None:
+    score = compute_trend_score(cp_4h, cp_12h)
+    if score is None:
         return "UNKNOWN"
-    if cp_4h > 0.50 and cp_12h > 0.50:
+    if score >= LONG_THRESHOLD:
         return "LONG"
-    if cp_4h < 0.50 and cp_12h < 0.50:
+    if score <= SHORT_THRESHOLD:
         return "SHORT"
     return "SIDEWAYS"
 

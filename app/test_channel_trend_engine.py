@@ -45,37 +45,62 @@ class TestComputeTrendScore(unittest.TestCase):
     def test_weights_sum_to_one(self):
         self.assertAlmostEqual(cte.TREND_SCORE_W4H + cte.TREND_SCORE_W12H, 1.0, places=9)
 
+    def test_threshold_constants_exist(self):
+        self.assertAlmostEqual(cte.LONG_THRESHOLD,  0.65, places=9)
+        self.assertAlmostEqual(cte.SHORT_THRESHOLD, 0.35, places=9)
+
 
 # ---------------------------------------------------------------------------
 # compute_trend_state
 # ---------------------------------------------------------------------------
 
 class TestComputeTrendState(unittest.TestCase):
+    # TrendState is now derived from TrendScore = 0.4*CP_4H + 0.6*CP_12H.
+    # LONG >= 0.65 | SHORT <= 0.35 | SIDEWAYS otherwise | UNKNOWN if score is None
 
-    def test_long(self):
-        # Both CPs clearly above 0.50
-        self.assertEqual(cte.compute_trend_state(cp_4h=0.7, cp_12h=0.8), "LONG")
+    def test_long_score_above_threshold(self):
+        # score = 0.4*0.8 + 0.6*0.9 = 0.32 + 0.54 = 0.86 → LONG
+        self.assertEqual(cte.compute_trend_state(cp_4h=0.8, cp_12h=0.9), "LONG")
 
-    def test_long_just_above_threshold(self):
-        self.assertEqual(cte.compute_trend_state(cp_4h=0.51, cp_12h=0.51), "LONG")
+    def test_long_at_exact_threshold(self):
+        # Need score == 0.65 exactly: 0.4*a + 0.6*b = 0.65
+        # Use a=0.65, b=0.65 → score=0.65 → LONG (>= threshold)
+        self.assertEqual(cte.compute_trend_state(cp_4h=0.65, cp_12h=0.65), "LONG")
 
-    def test_short(self):
-        # Both CPs clearly below 0.50
-        self.assertEqual(cte.compute_trend_state(cp_4h=0.3, cp_12h=0.4), "SHORT")
+    def test_short_score_below_threshold(self):
+        # score = 0.4*0.2 + 0.6*0.1 = 0.08 + 0.06 = 0.14 → SHORT
+        self.assertEqual(cte.compute_trend_state(cp_4h=0.2, cp_12h=0.1), "SHORT")
 
-    def test_short_just_below_threshold(self):
-        self.assertEqual(cte.compute_trend_state(cp_4h=0.49, cp_12h=0.49), "SHORT")
+    def test_short_at_exact_threshold(self):
+        # a=0.35, b=0.35 → score=0.35 → SHORT (<= threshold)
+        self.assertEqual(cte.compute_trend_state(cp_4h=0.35, cp_12h=0.35), "SHORT")
 
-    def test_sideways_diverging_high_low(self):
-        # 4H above, 12H below → neither LONG nor SHORT
-        self.assertEqual(cte.compute_trend_state(cp_4h=0.7, cp_12h=0.3), "SIDEWAYS")
-
-    def test_sideways_diverging_low_high(self):
-        self.assertEqual(cte.compute_trend_state(cp_4h=0.3, cp_12h=0.7), "SIDEWAYS")
-
-    def test_sideways_at_exact_threshold(self):
-        # 0.50 is NOT > 0.50, so not LONG; NOT < 0.50, so not SHORT → SIDEWAYS
+    def test_sideways_mid_score(self):
+        # a=0.50, b=0.50 → score=0.50 → SIDEWAYS (0.35 < 0.50 < 0.65)
         self.assertEqual(cte.compute_trend_state(cp_4h=0.50, cp_12h=0.50), "SIDEWAYS")
+
+    def test_sideways_just_above_short_threshold(self):
+        # score just above 0.35 → SIDEWAYS
+        # a=0.36, b=0.36 → score=0.36
+        self.assertEqual(cte.compute_trend_state(cp_4h=0.36, cp_12h=0.36), "SIDEWAYS")
+
+    def test_sideways_just_below_long_threshold(self):
+        # a=0.64, b=0.64 → score=0.64 → SIDEWAYS
+        self.assertEqual(cte.compute_trend_state(cp_4h=0.64, cp_12h=0.64), "SIDEWAYS")
+
+    def test_sideways_diverging_cps(self):
+        # 4H high, 12H low → score = 0.4*0.9 + 0.6*0.1 = 0.36 + 0.06 = 0.42 → SIDEWAYS
+        self.assertEqual(cte.compute_trend_state(cp_4h=0.9, cp_12h=0.1), "SIDEWAYS")
+
+    def test_both_cp_above_half_but_score_below_long(self):
+        # Both > 0.50 does NOT guarantee LONG under new rule
+        # score = 0.4*0.55 + 0.6*0.55 = 0.55 → SIDEWAYS (< 0.65)
+        self.assertEqual(cte.compute_trend_state(cp_4h=0.55, cp_12h=0.55), "SIDEWAYS")
+
+    def test_both_cp_below_half_but_score_above_short(self):
+        # Both < 0.50 does NOT guarantee SHORT under new rule
+        # score = 0.4*0.45 + 0.6*0.45 = 0.45 → SIDEWAYS (> 0.35)
+        self.assertEqual(cte.compute_trend_state(cp_4h=0.45, cp_12h=0.45), "SIDEWAYS")
 
     def test_unknown_when_cp_4h_missing(self):
         self.assertEqual(cte.compute_trend_state(cp_4h=None, cp_12h=0.7), "UNKNOWN")

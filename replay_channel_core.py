@@ -253,8 +253,20 @@ def _write_txt(path: str, result: dict) -> None:
             f" pivot_left={tc['pivot_left']}  pivot_right={tc['pivot_right']}"
         )
 
+    # TrendScore thresholds
+    lines += [
+        "",
+        "-" * W,
+        "  TrendScore thresholds  (TrendScore = 0.4*CP_4H + 0.6*CP_12H)",
+        "-" * W,
+        f"  LONG    >= {cfg.get('long_threshold',  0.65):.2f}",
+        f"  SHORT   <= {cfg.get('short_threshold', 0.35):.2f}",
+        "  SIDEWAYS   otherwise",
+        "",
+    ]
+
     # Validity overview
-    lines += ["", "-" * W, "  Channel validity per timeframe", "-" * W]
+    lines += ["-" * W, "  Channel validity per timeframe", "-" * W]
     for tf in tf_names:
         valid = summ[f"cp_valid_ticks_{tf}"]
         total = summ["candles_1m_processed"]
@@ -533,6 +545,9 @@ def run(tf_config: List[dict] = None, replay_days: int = DEFAULT_REPLAY_DAYS) ->
                 }
                 for tfc in tf_config
             },
+            "trend_score_formula": "0.4*CP_4H + 0.6*CP_12H",
+            "long_threshold":      cte.LONG_THRESHOLD,
+            "short_threshold":     cte.SHORT_THRESHOLD,
             "buy_zone_threshold":  BUY_ZONE_THRESHOLD,
             "sell_zone_threshold": SELL_ZONE_THRESHOLD,
         },
