@@ -188,6 +188,7 @@ def _write_txt(path: str, result: dict) -> None:
     inv_by = result.get("invalid_reasons_by_timeframe", {})
     dbg_by = result.get("debug_counts_by_timeframe", {})
     last   = result.get("last_values", {})
+    lt     = result.get("last_tick", {})
 
     tf_names = list(cfg["timeframes"].keys())
     W = 80
@@ -283,8 +284,56 @@ def _write_txt(path: str, result: dict) -> None:
         f"  TrendScore   = {_pct(summ.get('last_trend_score'))}   (0.4*CP_4H + 0.6*CP_12H)",
         f"  TrendState   = {summ.get('last_trend_state') or 'N/A'}",
         "",
-        "=" * W,
     ]
+
+    # Last tick trendline audit
+    if lt:
+        lines += [
+            "-" * W,
+            "  Last tick trendline audit",
+            "-" * W,
+            f"  ts_utc       = {lt.get('ts_utc', 'N/A')}",
+            f"  price        = {_pct(lt.get('price'))}",
+            f"  cpagg        = {_pct(lt.get('cpagg'))}",
+            f"  trend_score  = {_pct(lt.get('trend_score'))}",
+            f"  trend_state  = {lt.get('trend_state') or 'N/A'}",
+            "",
+            f"  {'TF':>4s}  {'raw_cp':>8s}  {'eff_cp':>8s}",
+        ]
+        raw_cp_lt = lt.get("raw_cp_by_tf", {})
+        eff_cp_lt = lt.get("effective_cp_by_tf", {})
+        for tf in tf_names:
+            lines.append(
+                f"  {tf:>4s}  {_pct(raw_cp_lt.get(tf)):>8s}  {_pct(eff_cp_lt.get(tf)):>8s}"
+            )
+
+        lines += [""]
+        tl_by = lt.get("trendline_by_tf", {})
+        tl_fields = [
+            ("valid",             lambda d: str(d.get("valid", "N/A"))),
+            ("reason",            lambda d: str(d.get("reason") or "none")),
+            ("lower_now",         lambda d: _pct(d.get("lower_now"))),
+            ("upper_now",         lambda d: _pct(d.get("upper_now"))),
+            ("width_now",         lambda d: _pct(d.get("width_now"))),
+            ("lower_slope",       lambda d: _pct(d.get("lower_slope"))),
+            ("lower_intercept",   lambda d: _pct(d.get("lower_intercept"))),
+            ("upper_slope",       lambda d: _pct(d.get("upper_slope"))),
+            ("upper_intercept",   lambda d: _pct(d.get("upper_intercept"))),
+            ("pivot_low_count",   lambda d: str(d.get("pivot_low_count", "N/A"))),
+            ("pivot_high_count",  lambda d: str(d.get("pivot_high_count", "N/A"))),
+            ("used_low_indices",  lambda d: str(d.get("used_low_indices", []))),
+            ("used_high_indices", lambda d: str(d.get("used_high_indices", []))),
+        ]
+        col_w = 22
+        hdr2  = f"  {'Field':<{col_w}}" + "".join(f"{tf:>20s}" for tf in tf_names)
+        sep2  = "  " + "-" * (col_w + 20 * len(tf_names))
+        lines += [hdr2, sep2]
+        for label, fn in tl_fields:
+            vals = [fn(tl_by.get(tf, {})) for tf in tf_names]
+            lines.append(f"  {label:<{col_w}}" + "".join(f"{v:>20s}" for v in vals))
+        lines.append("")
+
+    lines += ["=" * W]
 
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
@@ -332,6 +381,7 @@ def run(tf_config: List[dict], replay_days: int, max_pivots: int) -> dict:
     ch_state        = cse.ChannelState()
     cp_valid_ticks: Dict[str, int] = {tfc["name"]: 0 for tfc in tf_config}
     last_bounds:    Dict[str, dict] = {tfc["name"]: {} for tfc in tf_config}
+    last_ch_by_tf:  Dict[str, Optional[dict]] = {tfc["name"]: None for tfc in tf_config}
     last_row: Optional[dict] = None
 
     print(f"\nReplaying {len(replay)} candles ...")
@@ -355,6 +405,8 @@ def run(tf_config: List[dict], replay_days: int, max_pivots: int) -> dict:
                     "upper_now": ch.get("upper_now"),
                     "width_now": ch.get("width_now"),
                 }
+            if ch is not None:
+                last_ch_by_tf[tf_name] = ch
 
         cse.update_channel_state(ch_state, ts_utc, raw_cp)
         eff_cp = cse.effective_cp_by_tf(ch_state)
@@ -403,6 +455,39 @@ def run(tf_config: List[dict], replay_days: int, max_pivots: int) -> dict:
             "eff_cp": last_row["eff_cp"].get(tf) if last_row else None,
         }
 
+    # last_tick — full snapshot of the final 1m candle
+    def _trendline_audit(ch: Optional[dict]) -> dict:
+        if not ch:
+            return {"valid": False, "reason": "no_channel_built"}
+        fields = [
+            "valid", "reason",
+            "lower_now", "upper_now", "width_now",
+            "lower_slope", "lower_intercept",
+            "upper_slope", "upper_intercept",
+            "used_low_indices", "used_high_indices",
+            "pivot_low_count", "pivot_high_count",
+        ]
+        out = {}
+        for f in fields:
+            v = ch.get(f)
+            out[f] = _r(v) if isinstance(v, float) else v
+        return out
+
+    last_tick: dict = {}
+    if last_row:
+        trendline_by_tf = {tf: _trendline_audit(last_ch_by_tf.get(tf))
+                           for tf in ("1H", "4H", "12H", "1D")}
+        last_tick = {
+            "ts_utc":             last_row["ts_utc"],
+            "price":              last_row["close"],
+            "cpagg":              last_row["cpagg"],
+            "trend_score":        last_row["trend_score"],
+            "trend_state":        last_row["trend_state"],
+            "raw_cp_by_tf":       last_row["raw_cp"],
+            "effective_cp_by_tf": last_row["eff_cp"],
+            "trendline_by_tf":    trendline_by_tf,
+        }
+
     result = {
         "config": {
             "candle_path":     CANDLE_PATH,
@@ -431,6 +516,7 @@ def run(tf_config: List[dict], replay_days: int, max_pivots: int) -> dict:
         },
         "debug_counts_by_timeframe": debug_by,
         "last_values": last_values,
+        "last_tick":   last_tick,
     }
     return result
 
