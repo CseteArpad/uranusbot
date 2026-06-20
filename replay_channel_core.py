@@ -38,8 +38,9 @@ DEFAULT_TF_CONFIG: List[dict] = [
 
 WEIGHTS: Dict[str, float] = {"1H": 0.10, "4H": 0.20, "12H": 0.30, "1D": 0.40}
 
-# CPagg thresholds are defined in channel_trend_engine; mirrored here for _cpagg
-# (CandidateAction and TrendState are now computed by channel_trend_engine)
+# CPagg thresholds — mirrored from channel_trend_engine for report/config output
+BUY_ZONE_THRESHOLD  = cte.BUY_ZONE_THRESHOLD
+SELL_ZONE_THRESHOLD = cte.SELL_ZONE_THRESHOLD
 
 
 # ---------------------------------------------------------------------------
