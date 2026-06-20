@@ -1,0 +1,8 @@
+{
+  "updated_utc": "AUTO",
+  "pair": "XRP/USDC",
+  "std_sell_pct": 3.0,
+  "std_buy_pct": 3.0,
+  "panic_sell_pct": 1.0,
+  "panic_buy_pct": 1.0
+}

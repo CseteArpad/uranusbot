@@ -1,0 +1,589 @@
+{% extends "base.html" %}
+
+{% block title %}Uranus Bot – Beállítások{% endblock %}
+{% block brand_title %}Uranus Bot – Beállítások{% endblock %}
+
+{% block extra_css %}
+.settings-grid{
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap:14px;
+}
+.settings-form{
+  display:grid;
+  gap:12px;
+}
+.settings-row{
+  display:grid;
+  grid-template-columns: 1fr 180px;
+  gap:12px;
+  align-items:center;
+}
+.settings-row label{
+  font-size:13px;
+  color:var(--muted);
+}
+.settings-row input,
+.settings-row select{
+  width:100%;
+  background:rgba(255,255,255,.04);
+  color:var(--text);
+  border:1px solid var(--line);
+  border-radius:10px;
+  padding:10px 12px;
+  font-size:14px;
+}
+.settings-actions{
+  display:flex;
+  gap:10px;
+  align-items:center;
+  margin-top:8px;
+  flex-wrap:wrap;
+}
+.msg{
+  font-size:13px;
+  color:var(--muted);
+}
+.msg.ok{ color:var(--good); }
+.msg.err{ color:var(--bad); }
+
+.helper{
+  font-size:12px;
+  color:var(--muted);
+  margin-top:4px;
+}
+
+.section-title{
+  margin:0 0 10px 0;
+  font-size:14px;
+  font-weight:800;
+}
+
+.level-grid{
+  display:grid;
+  grid-template-columns: 1fr 180px;
+  gap:10px 12px;
+  align-items:center;
+}
+.level-grid .k{
+  font-size:13px;
+  color:var(--muted);
+}
+.level-grid .v{
+  font-size:14px;
+  font-weight:700;
+  padding:10px 12px;
+  border:1px solid var(--line);
+  border-radius:10px;
+  background:rgba(255,255,255,.03);
+}
+.level-box{
+  margin-top:14px;
+}
+.level-note{
+  font-size:12px;
+  color:var(--muted);
+  margin-top:10px;
+}
+
+@media (max-width: 900px){
+  .settings-grid{
+    grid-template-columns: 1fr;
+  }
+  .settings-row,
+  .level-grid{
+    grid-template-columns: 1fr;
+  }
+}
+{% endblock %}
+
+{% block content %}
+<div class="card">
+  <h2 class="title">Uranus runner beállítások</h2>
+  <div class="muted" style="margin-bottom:12px;">
+    Itt a Uranus runner aktív rendszer- és V2 szabálybeállításai állíthatók.
+    Mentés után a runner automatikusan újraindul.
+  </div>
+
+  <div class="settings-grid">
+    <div class="card">
+      <h3 class="section-title">Általános futási beállítások</h3>
+      <div class="settings-form">
+        <div class="settings-row">
+          <label for="tick_seconds">TICK_SECONDS</label>
+          <input id="tick_seconds" type="number" step="0.1">
+        </div>
+
+        <div class="settings-row">
+          <label for="pair">PAIR</label>
+          <input id="pair" type="text">
+        </div>
+
+        <div class="settings-row">
+          <label for="timeframe">TIMEFRAME</label>
+          <input id="timeframe" type="text">
+        </div>
+
+        <div class="settings-row">
+          <label for="limit">LIMIT</label>
+          <input id="limit" type="number" step="1">
+        </div>
+
+        <div class="settings-row">
+          <label for="execution_enabled">EXECUTION_ENABLED</label>
+          <select id="execution_enabled">
+            <option value="true">BE</option>
+            <option value="false">KI</option>
+          </select>
+        </div>
+
+        <div class="settings-row">
+          <label for="execution_log_only">EXECUTION_LOG_ONLY</label>
+          <select id="execution_log_only">
+            <option value="true">Csak naplózás</option>
+            <option value="false">Valós végrehajtás</option>
+          </select>
+        </div>
+
+        <div class="settings-row">
+          <label for="buy_lock_ttl_sec">BUY_LOCK_TTL_SEC</label>
+          <input id="buy_lock_ttl_sec" type="number" step="1">
+        </div>
+
+        <div class="settings-row">
+          <label for="kill_switch">KILL_SWITCH</label>
+          <select id="kill_switch">
+            <option value="false">KI</option>
+            <option value="true">BE</option>
+          </select>
+        </div>
+
+        <div class="settings-row">
+          <label for="max_trades_per_day">MAX_TRADES_PER_DAY</label>
+          <input id="max_trades_per_day" type="number" step="1">
+        </div>
+
+        <div class="settings-row">
+          <label for="daily_loss_cap_pct">DAILY_LOSS_CAP_PCT</label>
+          <input id="daily_loss_cap_pct" type="number" step="0.01">
+        </div>
+
+        <div class="settings-row">
+          <label for="ft_url">FT_URL</label>
+          <input id="ft_url" type="text">
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="section-title">V2 stratégiai beállítások</h3>
+
+      <div class="settings-form">
+        <div class="settings-row">
+          <label for="std_sell_enabled">STANDARD SELL engedélyezve</label>
+          <select id="std_sell_enabled">
+            <option value="true">Igen</option>
+            <option value="false">Nem</option>
+          </select>
+        </div>
+
+        <div class="settings-row">
+          <label for="std_sell_pct">STD SELL %</label>
+          <input id="std_sell_pct" type="number" step="0.01">
+        </div>
+
+        <div class="settings-row">
+          <label for="recovery_sell_retrace_pct">RECOVERY SELL retrace %</label>
+          <input id="recovery_sell_retrace_pct" type="number" step="0.01">
+        </div>
+
+        <div class="settings-row">
+          <label for="recovery_profit_target_pct">RECOVERY profit cél %</label>
+          <input id="recovery_profit_target_pct" type="number" step="0.01">
+        </div>
+
+        <div class="settings-row">
+          <label for="panic_sell_enabled">PANIC SELL engedélyezve</label>
+          <select id="panic_sell_enabled">
+            <option value="true">Igen</option>
+            <option value="false">Nem</option>
+          </select>
+        </div>
+
+        <div class="settings-row">
+          <label for="panic_sell_pct">PANIC SELL %</label>
+          <input id="panic_sell_pct" type="number" step="0.01">
+        </div>
+
+        <div class="settings-row">
+          <label for="sell_reversal_min_pct">SELL REVERSAL MIN %</label>
+          <input id="sell_reversal_min_pct" type="number" step="0.01">
+        </div>
+
+        <div class="settings-row">
+          <label for="catastrophe_sell_pct">CATASTROPHE SELL %</label>
+          <input id="catastrophe_sell_pct" type="number" step="0.01">
+        </div>
+
+        <div class="settings-row">
+          <label for="std_buy_enabled">STANDARD BUY engedélyezve</label>
+          <select id="std_buy_enabled">
+            <option value="true">Igen</option>
+            <option value="false">Nem</option>
+          </select>
+        </div>
+
+        <div class="settings-row">
+          <label for="std_buy_pct">STD BUY %</label>
+          <input id="std_buy_pct" type="number" step="0.01">
+        </div>
+
+        <div class="settings-row">
+          <label for="recovery_buy_rebound_pct">RECOVERY BUY rebound %</label>
+          <input id="recovery_buy_rebound_pct" type="number" step="0.01">
+        </div>
+
+        <div class="settings-row">
+          <label for="panic_buy_enabled">PANIC BUY engedélyezve</label>
+          <select id="panic_buy_enabled">
+            <option value="true">Igen</option>
+            <option value="false">Nem</option>
+          </select>
+        </div>
+
+        <div class="settings-row">
+          <label for="panic_buy_pct">PANIC BUY %</label>
+          <input id="panic_buy_pct" type="number" step="0.01">
+        </div>
+
+        <div class="settings-row">
+          <label for="panic_buy_confirm_ticks">PANIC BUY megerősítő tick</label>
+          <input id="panic_buy_confirm_ticks" type="number" step="1">
+        </div>
+
+        <div class="settings-row">
+          <label for="catastrophe_buy_pct">CATASTROPHE BUY %</label>
+          <input id="catastrophe_buy_pct" type="number" step="0.01">
+        </div>
+
+        <div class="settings-row">
+          <label for="ma_filter_enabled">MA filter engedélyezve</label>
+          <select id="ma_filter_enabled">
+            <option value="true">Igen</option>
+            <option value="false">Nem</option>
+          </select>
+        </div>
+
+        <div class="settings-row">
+          <label for="ma_period">MA periódus</label>
+          <input id="ma_period" type="number" step="1">
+        </div>
+
+        <div class="settings-row">
+          <label for="ma_sideways_band_pct">MA oldalazási sáv %</label>
+          <input id="ma_sideways_band_pct" type="number" step="0.01">
+        </div>
+
+        <div class="helper">
+          A stratégiai mezőknek a Strategy Lab felületével 1:1-ben egyezniük kell.
+          Az itt megadott értékek az éles motorhoz tartoznak; a Labor külön paraméterkészlettel fut.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card level-box">
+    <h3 class="section-title">Aktuális számolt küszöbszintek / zónák</h3>
+
+    <div class="level-grid">
+      <div class="k">Reference base</div>
+      <div id="lvl_reference_base" class="v">—</div>
+
+      <div class="k">Base</div>
+      <div id="lvl_base" class="v">—</div>
+
+      <div class="k">Peak</div>
+      <div id="lvl_peak" class="v">—</div>
+
+      <div class="k">Trough</div>
+      <div id="lvl_trough" class="v">—</div>
+
+      <div class="k">STD SELL</div>
+      <div id="lvl_std_sell" class="v">—</div>
+
+      <div class="k">RECOVERY SELL</div>
+      <div id="lvl_recovery_sell" class="v">—</div>
+
+      <div class="k">PANIC SELL</div>
+      <div id="lvl_panic_sell" class="v">—</div>
+
+      <div class="k">CATASTROPHE SELL</div>
+      <div id="lvl_catastrophe_sell" class="v">—</div>
+
+      <div class="k">STD BUY</div>
+      <div id="lvl_std_buy" class="v">—</div>
+
+      <div class="k">RECOVERY BUY</div>
+      <div id="lvl_recovery_buy" class="v">—</div>
+
+      <div class="k">PANIC BUY</div>
+      <div id="lvl_panic_buy" class="v">—</div>
+
+      <div class="k">CATASTROPHE BUY</div>
+      <div id="lvl_catastrophe_buy" class="v">—</div>
+    </div>
+
+    <div class="level-note">
+      Ezek az aktuális state alapján számolt élő küszöbök.
+    </div>
+  </div>
+
+  <div class="settings-actions">
+    <button class="btn btn-good" type="button" onclick="saveSettings()">Mentés</button>
+    <button class="btn" type="button" onclick="loadSettings()">Újratöltés</button>
+    <button class="btn" type="button" onclick="loadCurrentLevels()">Küszöbszintek frissítése</button>
+    <a class="btn" href="/rules">Szabályok</a>
+    <span id="msg" class="msg">Kész.</span>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function normalizeDecimalInputValue(value) {
+  if (value === null || value === undefined) return "";
+  return String(value).replace(",", ".");
+}
+
+function setNormalizedValue(id, value) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (value === null || value === undefined || value === "") {
+    el.value = "";
+    return;
+  }
+  el.value = normalizeDecimalInputValue(value);
+}
+
+function getNormalizedFloat(id) {
+  const el = document.getElementById(id);
+  if (!el) return NaN;
+  const raw = normalizeDecimalInputValue(el.value).trim();
+  el.value = raw;
+  return parseFloat(raw);
+}
+
+function getNormalizedInt(id) {
+  const el = document.getElementById(id);
+  if (!el) return NaN;
+  return parseInt(String(el.value).trim(), 10);
+}
+
+function attachDecimalNormalizer(ids) {
+  ids.forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener("input", () => {
+      const start = el.selectionStart;
+      const end = el.selectionEnd;
+      const normalized = normalizeDecimalInputValue(el.value);
+      if (normalized !== el.value) {
+        el.value = normalized;
+        try {
+          el.setSelectionRange(start, end);
+        } catch (e) {}
+      }
+    });
+  });
+}
+
+function boolToSelectValue(v){
+  return v ? "true" : "false";
+}
+
+function selectValueToBool(v){
+  return String(v).toLowerCase() === "true";
+}
+
+function fmtLevel(v){
+  if (v === null || v === undefined || v === "") return "—";
+  const n = Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  return n.toFixed(6);
+}
+
+async function loadSettings(){
+  const msg = document.getElementById("msg");
+  msg.className = "msg";
+  msg.textContent = "Betöltés...";
+
+  try{
+    const res = await fetch("/api/settings", {cache:"no-store"});
+    const data = await res.json();
+
+    document.getElementById("tick_seconds").value = data.tick_seconds ?? "";
+    document.getElementById("pair").value = data.pair ?? "";
+    document.getElementById("timeframe").value = data.timeframe ?? "";
+    document.getElementById("limit").value = data.limit ?? "";
+    document.getElementById("execution_enabled").value = boolToSelectValue(Boolean(data.execution_enabled));
+    document.getElementById("execution_log_only").value = boolToSelectValue(Boolean(data.execution_log_only));
+    document.getElementById("buy_lock_ttl_sec").value = data.buy_lock_ttl_sec ?? "";
+    document.getElementById("kill_switch").value = boolToSelectValue(Boolean(data.kill_switch));
+    document.getElementById("max_trades_per_day").value = data.max_trades_per_day ?? "";
+    document.getElementById("daily_loss_cap_pct").value = data.daily_loss_cap_pct ?? "";
+    document.getElementById("ft_url").value = data.ft_url ?? "";
+
+    document.getElementById("std_sell_enabled").value = boolToSelectValue(data.std_sell_enabled !== false);
+    setNormalizedValue("std_sell_pct", data.std_sell_pct);
+
+    setNormalizedValue("recovery_sell_retrace_pct", data.recovery_sell_retrace_pct);
+    setNormalizedValue("recovery_profit_target_pct", data.recovery_profit_target_pct);
+
+    document.getElementById("panic_sell_enabled").value = boolToSelectValue(data.panic_sell_enabled !== false);
+    setNormalizedValue("panic_sell_pct", data.panic_sell_pct);
+    setNormalizedValue("sell_reversal_min_pct", data.sell_reversal_min_pct);
+    setNormalizedValue("catastrophe_sell_pct", data.catastrophe_sell_pct);
+
+    document.getElementById("std_buy_enabled").value = boolToSelectValue(data.std_buy_enabled !== false);
+    setNormalizedValue("std_buy_pct", data.std_buy_pct);
+    setNormalizedValue("recovery_buy_rebound_pct", data.recovery_buy_rebound_pct);
+
+    document.getElementById("panic_buy_enabled").value = boolToSelectValue(data.panic_buy_enabled !== false);
+    setNormalizedValue("panic_buy_pct", data.panic_buy_pct);
+    document.getElementById("panic_buy_confirm_ticks").value = data.panic_buy_confirm_ticks ?? "";
+
+    setNormalizedValue("catastrophe_buy_pct", data.catastrophe_buy_pct);
+
+    document.getElementById("ma_filter_enabled").value = boolToSelectValue(data.ma_filter_enabled !== false);
+    document.getElementById("ma_period").value = data.ma_period ?? "";
+    setNormalizedValue("ma_sideways_band_pct", data.ma_sideways_band_pct);
+
+    msg.className = "msg ok";
+    msg.textContent = "Betöltve.";
+  } catch (e){
+    msg.className = "msg err";
+    msg.textContent = "Betöltési hiba: " + e;
+  }
+}
+
+async function saveSettings(){
+  const msg = document.getElementById("msg");
+  msg.className = "msg";
+  msg.textContent = "Mentés...";
+
+  const payload = {
+    tick_seconds: parseFloat(document.getElementById("tick_seconds").value),
+    pair: document.getElementById("pair").value.trim(),
+    timeframe: document.getElementById("timeframe").value.trim(),
+    limit: parseInt(document.getElementById("limit").value, 10),
+    execution_enabled: selectValueToBool(document.getElementById("execution_enabled").value),
+    execution_log_only: selectValueToBool(document.getElementById("execution_log_only").value),
+    buy_lock_ttl_sec: parseInt(document.getElementById("buy_lock_ttl_sec").value, 10),
+    kill_switch: selectValueToBool(document.getElementById("kill_switch").value),
+    max_trades_per_day: parseInt(document.getElementById("max_trades_per_day").value, 10),
+    daily_loss_cap_pct: parseFloat(document.getElementById("daily_loss_cap_pct").value),
+    ft_url: document.getElementById("ft_url").value.trim(),
+
+    std_sell_enabled: selectValueToBool(document.getElementById("std_sell_enabled").value),
+    std_sell_pct: getNormalizedFloat("std_sell_pct"),
+
+    recovery_sell_retrace_pct: getNormalizedFloat("recovery_sell_retrace_pct"),
+    recovery_profit_target_pct: getNormalizedFloat("recovery_profit_target_pct"),
+
+    panic_sell_enabled: selectValueToBool(document.getElementById("panic_sell_enabled").value),
+    panic_sell_pct: getNormalizedFloat("panic_sell_pct"),
+    sell_reversal_min_pct: getNormalizedFloat("sell_reversal_min_pct"),
+    catastrophe_sell_pct: getNormalizedFloat("catastrophe_sell_pct"),
+
+    std_buy_enabled: selectValueToBool(document.getElementById("std_buy_enabled").value),
+    std_buy_pct: getNormalizedFloat("std_buy_pct"),
+    recovery_buy_rebound_pct: getNormalizedFloat("recovery_buy_rebound_pct"),
+
+    panic_buy_enabled: selectValueToBool(document.getElementById("panic_buy_enabled").value),
+    panic_buy_pct: getNormalizedFloat("panic_buy_pct"),
+    panic_buy_confirm_ticks: getNormalizedInt("panic_buy_confirm_ticks"),
+    catastrophe_buy_pct: getNormalizedFloat("catastrophe_buy_pct"),
+
+    ma_filter_enabled: selectValueToBool(document.getElementById("ma_filter_enabled").value),
+    ma_period: getNormalizedInt("ma_period"),
+    ma_sideways_band_pct: getNormalizedFloat("ma_sideways_band_pct")
+  };
+
+  try{
+    const res = await fetch("/api/settings", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json();
+
+    if (!res.ok || !data.ok){
+      throw new Error(data.error || "ismeretlen hiba");
+    }
+
+    msg.className = "msg ok";
+    msg.textContent = "Mentve. A runner újraindult.";
+    await loadCurrentLevels();
+  } catch (e){
+    msg.className = "msg err";
+    msg.textContent = "Mentési hiba: " + e.message;
+  }
+}
+
+async function loadCurrentLevels(){
+  try{
+    const res = await fetch("/api/state", {cache:"no-store"});
+    const data = await res.json();
+    const levels = (data && data.levels) ? data.levels : {};
+
+    document.getElementById("lvl_reference_base").textContent = fmtLevel(levels.reference_base);
+    document.getElementById("lvl_base").textContent = fmtLevel(data.base);
+    document.getElementById("lvl_peak").textContent = fmtLevel(data.peak);
+    document.getElementById("lvl_trough").textContent = fmtLevel(data.trough);
+
+    document.getElementById("lvl_std_sell").textContent = fmtLevel(levels.std_sell);
+    document.getElementById("lvl_recovery_sell").textContent = fmtLevel(levels.recovery_sell);
+    document.getElementById("lvl_panic_sell").textContent = fmtLevel(levels.panic_sell);
+    document.getElementById("lvl_catastrophe_sell").textContent = fmtLevel(levels.catastrophe_sell);
+
+    document.getElementById("lvl_std_buy").textContent = fmtLevel(levels.std_buy);
+    document.getElementById("lvl_recovery_buy").textContent = fmtLevel(levels.recovery_buy);
+    document.getElementById("lvl_panic_buy").textContent = fmtLevel(levels.panic_buy);
+    document.getElementById("lvl_catastrophe_buy").textContent = fmtLevel(levels.catastrophe_buy);
+  } catch (e){
+    document.getElementById("lvl_reference_base").textContent = "HIBA";
+    document.getElementById("lvl_base").textContent = "HIBA";
+    document.getElementById("lvl_peak").textContent = "HIBA";
+    document.getElementById("lvl_trough").textContent = "HIBA";
+    document.getElementById("lvl_std_sell").textContent = "HIBA";
+    document.getElementById("lvl_recovery_sell").textContent = "HIBA";
+    document.getElementById("lvl_panic_sell").textContent = "HIBA";
+    document.getElementById("lvl_catastrophe_sell").textContent = "HIBA";
+    document.getElementById("lvl_std_buy").textContent = "HIBA";
+    document.getElementById("lvl_recovery_buy").textContent = "HIBA";
+    document.getElementById("lvl_panic_buy").textContent = "HIBA";
+    document.getElementById("lvl_catastrophe_buy").textContent = "HIBA";
+  }
+}
+
+window.addEventListener("load", async () => {
+  await loadSettings();
+  await loadCurrentLevels();
+});
+
+attachDecimalNormalizer([
+  "std_sell_pct",
+  "recovery_sell_retrace_pct",
+  "recovery_profit_target_pct",
+  "ma_sideways_band_pct",
+  "panic_sell_pct",
+  "sell_reversal_min_pct",
+  "catastrophe_sell_pct",
+  "std_buy_pct",
+  "recovery_buy_rebound_pct",
+  "panic_buy_pct",
+  "catastrophe_buy_pct"
+]);
+</script>
+{% endblock %}

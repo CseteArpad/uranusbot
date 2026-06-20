@@ -1,0 +1,504 @@
+{% extends "base.html" %}
+
+{% block title %}Uranus Bot – Szabályok{% endblock %}
+{% block brand_title %}Uranus Bot – Szabályok{% endblock %}
+
+{% block extra_css %}
+.rules-toolbar{
+  display:flex;
+  gap:10px;
+  align-items:center;
+  justify-content:space-between;
+  flex-wrap:wrap;
+  margin-bottom:14px;
+}
+.rules-actions{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+}
+.rules-grid{
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap:14px;
+}
+.rules-col{
+  display:grid;
+  gap:14px;
+}
+.rule-card{
+  border:1px solid var(--line);
+  border-radius:14px;
+  padding:14px;
+  background:rgba(255,255,255,.03);
+}
+.rule-top{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:8px;
+}
+.rule-title{
+  font-size:16px;
+  font-weight:800;
+  margin:0;
+}
+.rule-side{
+  font-size:12px;
+  color:var(--muted);
+}
+.rule-body{
+  display:grid;
+  gap:10px;
+}
+.rule-meta{
+  font-size:13px;
+  color:var(--muted);
+}
+.rule-list{
+  margin:0;
+  padding-left:18px;
+  color:var(--text);
+  font-size:13px;
+}
+.rule-row{
+  display:grid;
+  grid-template-columns: 1fr 150px;
+  gap:10px;
+  align-items:center;
+}
+.rule-row label{
+  font-size:13px;
+  color:var(--muted);
+}
+.rule-row input,
+.rule-row textarea,
+.rule-row select{
+  width:100%;
+  background:rgba(255,255,255,.04);
+  color:var(--text);
+  border:1px solid var(--line);
+  border-radius:10px;
+  padding:10px 12px;
+  font-size:14px;
+}
+.rule-row textarea{
+  min-height:100px;
+  resize:vertical;
+}
+.rule-section-title{
+  margin:0 0 8px 0;
+  font-size:14px;
+  font-weight:800;
+}
+.msg{
+  font-size:13px;
+  color:var(--muted);
+}
+.msg.ok{ color:var(--good); }
+.msg.err{ color:var(--bad); }
+.small-note{
+  font-size:12px;
+  color:var(--muted);
+}
+.info-box{
+  border:1px solid var(--line);
+  border-radius:14px;
+  padding:14px;
+  background:rgba(255,255,255,.03);
+  margin-bottom:14px;
+}
+.info-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:14px;
+}
+pre.json-preview{
+  margin:0;
+  white-space:pre-wrap;
+  word-break:break-word;
+  font-size:12px;
+  color:var(--text);
+}
+@media (max-width: 980px){
+  .rules-grid,
+  .info-grid{
+    grid-template-columns:1fr;
+  }
+}
+{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="rules-toolbar">
+    <div>
+      <h2 class="title">Kanonikus szabályok</h2>
+      <div class="muted">
+        Itt a botmotor alapértelmezett, kanonikus szabályrendszere látható és szerkeszthető.
+        A saját komment mezők csak dokumentációs célúak, a döntési logikát nem módosítják.
+      </div>
+    </div>
+    <div class="rules-actions">
+      <a class="btn" href="/settings">Vissza a Beállításokhoz</a>
+      <button class="btn" type="button" onclick="loadAllRules()">Újratöltés</button>
+      <button class="btn btn-good" type="button" onclick="saveCanonicalRules()">Kanonikus mentés</button>
+    </div>
+  </div>
+
+  <div class="info-box">
+    <div class="info-grid">
+      <div>
+        <h3 class="rule-section-title">Fogalmak</h3>
+        <div id="definitionsBox" class="small-note">Betöltés...</div>
+      </div>
+      <div>
+        <h3 class="rule-section-title">Labor override állapot</h3>
+        <div id="labInfo" class="small-note">Betöltés...</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="rules-grid">
+    <div class="rules-col">
+      <div class="card">
+        <h3 class="section-title">SELL szabályok</h3>
+        <div id="sellRules"></div>
+      </div>
+    </div>
+    <div class="rules-col">
+      <div class="card">
+        <h3 class="section-title">BUY szabályok</h3>
+        <div id="buyRules"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="settings-actions" style="margin-top:14px;">
+    <button class="btn btn-good" type="button" onclick="saveCanonicalRules()">Kanonikus mentés</button>
+    <span id="msg" class="msg">Kész.</span>
+  </div>
+</div>
+
+<div class="card" style="margin-top:14px;">
+  <div class="rules-toolbar">
+    <div>
+      <h3 class="section-title">LAB override</h3>
+      <div class="muted">
+        Itt a labor override dokumentum szerkeszthető. Ez az éles botot nem érinti közvetlenül,
+        csak a labor / effektív szabályhalmazt módosítja.
+      </div>
+    </div>
+    <div class="rules-actions">
+      <button class="btn" type="button" onclick="loadLabEditor()">LAB újratöltés</button>
+      <button class="btn btn-good" type="button" onclick="saveLabRules()">LAB mentés</button>
+    </div>
+  </div>
+
+  <div class="rules-grid">
+    <div class="rules-col">
+      <div class="card">
+        <h3 class="section-title">Általános LAB beállítások</h3>
+
+        <div class="rule-row">
+          <label>LAB enabled</label>
+          <input id="lab_enabled" type="checkbox">
+        </div>
+
+        <div class="rule-row">
+          <label>Profilnév</label>
+          <input id="lab_profile_name" type="text">
+        </div>
+
+        <div class="rule-row">
+          <label>Megjegyzés</label>
+          <textarea id="lab_notes"></textarea>
+        </div>
+      </div>
+    </div>
+
+    <div class="rules-col">
+      <div class="card">
+        <h3 class="section-title">Override paraméterek</h3>
+        <div id="labOverrideParams"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="settings-actions" style="margin-top:14px;">
+    <button class="btn btn-good" type="button" onclick="saveLabRules()">LAB mentés</button>
+    <span id="labMsg" class="msg">Kész.</span>
+  </div>
+</div>
+
+
+
+<div class="card" style="margin-top:14px;">
+  <h3 class="section-title">Mentett labor profilok</h3>
+  <div id="profilesBox" class="small-note">Betöltés...</div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let canonicalRules = null;
+let labRules = null;
+let labProfiles = [];
+
+function esc(s){
+  return String(s ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function definitionsHtml(defs){
+  const entries = Object.entries(defs || {});
+  if (!entries.length) return "<div class='small-note'>Nincs definíció.</div>";
+  return entries.map(([k,v]) => `<div><strong>${esc(k)}</strong>: ${esc(v)}</div>`).join("");
+}
+
+function renderRuleCard(rule, side, idx){
+  const params = rule.params || {};
+  const conds = Array.isArray(rule.conditions_human) ? rule.conditions_human : [];
+  const paramsHtml = Object.entries(params).map(([k,v]) => `
+    <div class="rule-row">
+      <label>${esc(k)}</label>
+      <input type="number" step="0.0001" data-side="${esc(side)}" data-index="${idx}" data-param-key="${esc(k)}" value="${esc(v)}">
+    </div>
+  `).join("");
+
+  const condsHtml = conds.length
+    ? `<ul class="rule-list">${conds.map(x => `<li>${esc(x)}</li>`).join("")}</ul>`
+    : `<div class="small-note">Nincs feltétel leírás.</div>`;
+
+  return `
+    <div class="rule-card">
+      <div class="rule-top">
+        <div>
+          <div class="rule-title">${esc(rule.title)}</div>
+          <div class="rule-side">${esc(rule.id)} • ${esc(rule.side)}</div>
+        </div>
+        <label class="small-note">
+          <input type="checkbox" data-side="${esc(side)}" data-index="${idx}" data-field="enabled" ${rule.enabled ? "checked" : ""}>
+          Engedélyezve
+        </label>
+      </div>
+
+      <div class="rule-body">
+        <div class="rule-meta"><strong>Cél:</strong> ${esc(rule.goal || "")}</div>
+        <div class="rule-meta"><strong>Leírás:</strong> ${esc(rule.description || "")}</div>
+        <div class="rule-meta"><strong>Képlet:</strong> ${esc(rule.level_formula_human || "")}</div>
+
+        <div>
+          <div class="rule-section-title">Feltételek</div>
+          ${condsHtml}
+        </div>
+
+        <div class="rule-row">
+          <label>Priority</label>
+          <input type="number" step="1" data-side="${esc(side)}" data-index="${idx}" data-field="priority" value="${esc(rule.priority)}">
+        </div>
+
+        ${paramsHtml}
+
+        <div class="rule-row">
+          <label>Saját komment / megjegyzés</label>
+          <textarea data-side="${esc(side)}" data-index="${idx}" data-field="user_comment">${esc(rule.user_comment || "")}</textarea>
+        </div>
+
+        <div class="small-note">
+          <strong>Rendszer-komment:</strong> ${esc(rule.system_comment || "—")}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+
+function renderLabOverrideEditor(){
+  if (!labRules) return;
+
+  document.getElementById("lab_enabled").checked = !!labRules.enabled;
+  document.getElementById("lab_profile_name").value = labRules.profile_name || "";
+  document.getElementById("lab_notes").value = labRules.notes || "";
+
+  const overrides = labRules.overrides || {};
+
+  const defs = [
+    ["standard_sell","std_sell_pct","STD SELL %","sell_rules"],
+    ["profitless_sell","profitless_sell_pct","PROFITLESS SELL %","sell_rules"],
+    ["panic_sell","panic_sell_pct","PANIC SELL %","sell_rules"],
+    ["standard_buy","std_buy_pct","STD BUY %","buy_rules"],
+    ["profitless_buy","profitless_buy_pct","PROFITLESS BUY %","buy_rules"],
+    ["panic_buy","panic_buy_pct","PANIC BUY %","buy_rules"]
+  ];
+
+  const html = defs.map(([ruleId, paramKey, label]) => {
+    const val = overrides?.[ruleId]?.params?.[paramKey] ?? "";
+    return `
+      <div class="rule-row">
+        <label>${label}</label>
+        <input type="number" step="0.0001"
+          data-lab-rule="${ruleId}"
+          data-lab-param="${paramKey}"
+          value="${val}">
+      </div>
+    `;
+  }).join("");
+
+  document.getElementById("labOverrideParams").innerHTML = html;
+}
+
+function syncLabFromDom(){
+  labRules.enabled = !!document.getElementById("lab_enabled").checked;
+  labRules.profile_name = document.getElementById("lab_profile_name").value;
+  labRules.notes = document.getElementById("lab_notes").value;
+
+  const overrides = {};
+
+  document.querySelectorAll("[data-lab-rule]").forEach(el => {
+    const r = el.getAttribute("data-lab-rule");
+    const p = el.getAttribute("data-lab-param");
+    const v = el.value;
+
+    if (!v) return;
+
+    if (!overrides[r]) overrides[r] = {enabled:true, params:{}};
+    overrides[r].params[p] = Number(v);
+  });
+
+  labRules.overrides = overrides;
+}
+
+async function loadLabEditor(){
+  const res = await fetch("/api/lab-rules");
+  labRules = await res.json();
+  renderLabOverrideEditor();
+}
+
+async function saveLabRules(){
+  syncLabFromDom();
+
+  await fetch("/api/lab-rules", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(labRules)
+  });
+
+  loadLabEditor();
+}
+
+function renderRules(){
+  const sell = canonicalRules?.sell_rules || [];
+  const buy = canonicalRules?.buy_rules || [];
+
+  document.getElementById("sellRules").innerHTML = sell.map((r, i) => renderRuleCard(r, "sell_rules", i)).join("");
+  document.getElementById("buyRules").innerHTML = buy.map((r, i) => renderRuleCard(r, "buy_rules", i)).join("");
+  document.getElementById("definitionsBox").innerHTML = definitionsHtml(canonicalRules?.definitions || {});
+
+  const labInfo = labRules
+    ? `
+      <div><strong>Aktív:</strong> ${labRules.enabled ? "IGEN" : "NEM"}</div>
+      <div><strong>Profilnév:</strong> ${esc(labRules.profile_name || "—")}</div>
+      <div><strong>Megjegyzés:</strong> ${esc(labRules.notes || "—")}</div>
+    `
+    : `<div class="small-note">Nincs labor override adat.</div>`;
+
+  document.getElementById("labInfo").innerHTML = labInfo;
+
+  const profHtml = labProfiles.length
+    ? `<ul class="rule-list">${labProfiles.map(x => `<li>${esc(x)}</li>`).join("")}</ul>`
+    : `<div class="small-note">Nincs mentett labor profil.</div>`;
+
+  document.getElementById("profilesBox").innerHTML = profHtml;
+}
+
+function syncFromDom(){
+  if (!canonicalRules) return;
+
+  document.querySelectorAll("[data-field], [data-param-key]").forEach(el => {
+    const section = el.getAttribute("data-side");
+    const idx = Number(el.getAttribute("data-index"));
+    const rule = canonicalRules?.[section]?.[idx];
+    if (!rule) return;
+
+    const field = el.getAttribute("data-field");
+    const paramKey = el.getAttribute("data-param-key");
+
+    if (paramKey){
+      rule.params = rule.params || {};
+      rule.params[paramKey] = Number(el.value);
+      return;
+    }
+
+    if (field === "enabled"){
+      rule.enabled = !!el.checked;
+    } else if (field === "priority"){
+      rule.priority = Number(el.value);
+    } else if (field === "user_comment"){
+      rule.user_comment = el.value;
+    }
+  });
+}
+
+async function loadAllRules(){
+  const msg = document.getElementById("msg");
+  msg.className = "msg";
+  msg.textContent = "Betöltés...";
+
+  try{
+    const [r1, r2, r3] = await Promise.all([
+      fetch("/api/rules", {cache:"no-store"}),
+      fetch("/api/lab-rules", {cache:"no-store"}),
+      fetch("/api/lab-rules/profiles", {cache:"no-store"})
+    ]);
+
+    canonicalRules = await r1.json();
+    labRules = await r2.json();
+    const profilesPayload = await r3.json();
+    labProfiles = Array.isArray(profilesPayload?.profiles) ? profilesPayload.profiles : [];
+
+    renderRules();
+    msg.className = "msg ok";
+    msg.textContent = "Betöltve.";
+  } catch (e){
+    msg.className = "msg err";
+    msg.textContent = "Betöltési hiba: " + e;
+  }
+}
+
+async function saveCanonicalRules(){
+  const msg = document.getElementById("msg");
+  msg.className = "msg";
+  msg.textContent = "Mentés...";
+
+  try{
+    syncFromDom();
+
+    const res = await fetch("/api/rules", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify(canonicalRules)
+    });
+
+    const data = await res.json();
+    if (!res.ok || data.ok === false){
+      throw new Error(data.error || "Ismeretlen mentési hiba");
+    }
+
+    canonicalRules = data.rules || canonicalRules;
+    renderRules();
+
+    msg.className = "msg ok";
+    msg.textContent = "Kanonikus szabályok elmentve.";
+  } catch (e){
+    msg.className = "msg err";
+    msg.textContent = "Mentési hiba: " + e;
+  }
+}
+
+loadAllRules();
+</script>
+{% endblock %}

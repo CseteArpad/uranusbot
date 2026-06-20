@@ -1,0 +1,92 @@
+<section id="freqtrade-block" style="margin-top:18px;">
+  <div style="border:1px solid #2b2b2b; border-radius:14px; padding:14px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+      <h2 style="margin:0; font-size:18px;">Freqtrade</h2>
+      <div id="ft-status-pill" style="padding:4px 10px; border-radius:999px; border:1px solid #2b2b2b; font-size:12px;">
+        betöltés…
+      </div>
+    </div>
+
+    <div style="margin-top:12px; display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:10px;">
+      <div style="border:1px solid #2b2b2b; border-radius:12px; padding:10px;">
+        <div style="font-size:12px; opacity:.75;">Státusz</div>
+        <div id="ft-status" style="font-size:16px; font-weight:600;">–</div>
+      </div>
+
+      <div style="border:1px solid #2b2b2b; border-radius:12px; padding:10px;">
+        <div style="font-size:12px; opacity:.75;">Profit (összesen)</div>
+        <div id="ft-profit" style="font-size:16px; font-weight:600;">–</div>
+      </div>
+
+      <div style="border:1px solid #2b2b2b; border-radius:12px; padding:10px;">
+        <div style="font-size:12px; opacity:.75;">Nyitott trade</div>
+        <div id="ft-open" style="font-size:16px; font-weight:600;">–</div>
+      </div>
+
+      <div style="border:1px solid #2b2b2b; border-radius:12px; padding:10px;">
+        <div style="font-size:12px; opacity:.75;">Utolsó frissítés</div>
+        <div id="ft-updated" style="font-size:16px; font-weight:600;">–</div>
+      </div>
+    </div>
+
+    <details style="margin-top:10px;">
+      <summary style="cursor:pointer; opacity:.85;">Részletek (raw)</summary>
+      <pre id="ft-raw" style="white-space:pre-wrap; margin-top:8px; border:1px solid #2b2b2b; border-radius:12px; padding:10px; max-height:220px; overflow:auto;">–</pre>
+    </details>
+  </div>
+</section>
+
+<script>
+(function() {
+  const pill = document.getElementById('ft-status-pill');
+  const elStatus = document.getElementById('ft-status');
+  const elProfit = document.getElementById('ft-profit');
+  const elOpen = document.getElementById('ft-open');
+  const elUpd = document.getElementById('ft-updated');
+  const elRaw = document.getElementById('ft-raw');
+
+  function setPill(text, ok) {
+    pill.textContent = text;
+    pill.style.borderColor = ok ? '#1f6f3a' : '#7a1f1f';
+  }
+
+  function pick(obj, keys) {
+    for (const k of keys) {
+      if (obj && Object.prototype.hasOwnProperty.call(obj, k)) return obj[k];
+    }
+    return null;
+  }
+
+  async function refresh() {
+    try {
+      const r = await fetch('/api/freqtrade/summary', { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+
+      // rugalmas mezőkezelés (különböző summary formátumokra)
+      const status = pick(data, ['status', 'state', 'bot_state', 'running', 'ft_status']) ?? 'OK';
+      const profit = pick(data, ['profit_total', 'profit_total_abs', 'profit_total_pct', 'profit_all', 'profit']) ?? '–';
+      const openTrades = pick(data, ['open_trades', 'open_trade_count', 'open']) ?? '–';
+      const updated = pick(data, ['updated_at', 'ts', 'timestamp', 'time']) ?? new Date().toISOString();
+
+      elStatus.textContent = String(status);
+      elProfit.textContent = (typeof profit === 'number') ? profit.toString() : String(profit);
+      elOpen.textContent = String(openTrades);
+      elUpd.textContent = String(updated);
+      elRaw.textContent = JSON.stringify(data, null, 2);
+
+      setPill('ELÉRHETŐ', true);
+    } catch (e) {
+      elStatus.textContent = 'NEM ELÉRHETŐ';
+      elProfit.textContent = '–';
+      elOpen.textContent = '–';
+      elUpd.textContent = new Date().toISOString();
+      elRaw.textContent = String(e);
+      setPill('NEM ELÉRHETŐ', false);
+    }
+  }
+
+  refresh();
+  setInterval(refresh, 10000);
+})();
+</script>

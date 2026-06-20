@@ -1,0 +1,12 @@
+{
+  "standard_sell_drop_percent": 3.0,
+  "sell_no_profit_level": 100.1,
+  "sell_panic_level": 99.0,
+
+  "standard_buy_rebound_percent": 3.0,
+  "buy_no_profit_level": 99.9,
+  "buy_breakout_level": 101.0,
+
+  "base_amount_target": 1.0,
+  "base_amount_max": 1.5
+}

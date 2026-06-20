@@ -1,0 +1,953 @@
+{% extends "base.html" %}
+
+{% block title %}Uranus Bot – {{ (data.get('exchange') if data and data.get('exchange') else 'binance')|lower }}{% endblock %}
+{% block header %}Uranus Bot{% endblock %}
+
+{% set _root = data if data is defined and data is not none else {} %}
+{% set state = _root.get('state', _root) if _root is mapping else {} %}
+{% set services = _root.get('services', {}) if _root is mapping else {} %}
+
+{% set prices     = (state.get('prices') or {}) %}
+{% set market     = (state.get('market') or {}) %}
+{% set levels     = (state.get('levels') or {}) %}
+{% set decision   = (state.get('decision') or {}) %}
+{% set engine     = (state.get('engine') or {}) %}
+{% set thresholds = (decision.get('thresholds') or engine.get('thresholds') or {}) %}
+
+{% set base      = state.get('base') %}
+{% set peak      = state.get('peak') %}
+{% set trough    = state.get('trough') %}
+{% set last      = market.get('last') if market.get('last') is not none else state.get('last') %}
+{% set prev_last = market.get('prev_last') if market.get('prev_last') is not none else state.get('prev_last') %}
+{% set lowp      = market.get('low') if market.get('low') is not none else prices.get('low') %}
+{% set inpos     = (state.get('in_position') if state.get('in_position') is not none else false) %}
+
+{% block top_status %}
+<div class="pill">
+  <span class="dot {{ 'ok' if inpos else 'bad' }}"></span>
+  <span class="mono muted" id="top-position-pill">pozíció: {{ 'VAN' if inpos else 'NINCS' }}</span>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+.exchange-detail-grid{
+  display:grid;
+  grid-template-columns:repeat(12, minmax(0, 1fr));
+  gap:14px;
+  width:100%;
+  min-width:0;
+}
+
+.exchange-card{
+  grid-column:1 / -1;
+  min-width:0;
+  padding:14px;
+  border-radius:16px;
+  border:1px solid rgba(255,255,255,.08);
+  background:linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01));
+  box-shadow:0 12px 30px rgba(0,0,0,.35);
+}
+
+.exchange-title{
+  font-weight:800;
+  margin-bottom:10px;
+}
+
+.exchange-table{
+  width:100%;
+  border-collapse:collapse;
+  margin-top:6px;
+}
+
+.exchange-table td{
+  padding:6px 8px;
+  border-bottom:1px solid rgba(255,255,255,.08);
+  vertical-align:top;
+}
+
+.exchange-table td:first-child{
+  opacity:.75;
+  width:320px;
+}
+
+.exchange-pill{
+  display:inline-block;
+  padding:4px 10px;
+  border-radius:999px;
+  border:1px solid rgba(255,255,255,.12);
+  background:rgba(255,255,255,.03);
+  font-size:12px;
+}
+
+.exchange-small-note{
+  margin-top:10px;
+  font-size:12px;
+  opacity:.8;
+}
+
+.exchange-inline-muted{
+  opacity:.75;
+  font-size:12px;
+}
+
+.exchange-controls{
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px;
+  align-items:center;
+}
+
+.exchange-btnline{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+}
+
+button.exchange-svcbtn{
+  border-radius:12px;
+  border:1px solid rgba(255,255,255,.14);
+  background:rgba(255,255,255,.05);
+  color:#fff;
+  padding:8px 14px;
+  cursor:pointer;
+  font-weight:700;
+}
+
+button.exchange-svcbtn.start{ border-color:rgba(55,214,122,.4); }
+button.exchange-svcbtn.stop{ border-color:rgba(255,107,107,.4); }
+
+.exchange-statuspill{
+  display:inline-block;
+  padding:4px 10px;
+  border-radius:999px;
+  font-size:12px;
+  font-weight:700;
+  border:1px solid rgba(255,255,255,.14);
+}
+
+.exchange-statuspill.active{
+  background:rgba(55,214,122,.10);
+  border-color:rgba(55,214,122,.50);
+}
+
+.exchange-statuspill.inactive{
+  background:rgba(255,107,107,.10);
+  border-color:rgba(255,107,107,.50);
+}
+
+.exchange-statuspill.unknown{
+  background:rgba(148,163,184,.10);
+  border-color:rgba(148,163,184,.50);
+}
+
+.exchange-service-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:14px;
+}
+
+.exchange-quick-grid{
+  display:grid;
+  grid-template-columns:repeat(7, minmax(120px, 1fr));
+  gap:12px;
+}
+
+.exchange-chart-grid{
+  display:grid;
+  grid-template-columns:repeat(4, minmax(160px, 1fr));
+  gap:12px;
+  margin-bottom:14px;
+}
+
+.exchange-chart-kpi{
+  min-width:0;
+  padding:10px 12px;
+  border-radius:14px;
+  border:1px solid rgba(255,255,255,.10);
+  background:rgba(255,255,255,.03);
+}
+
+.exchange-chart-kpi .k{
+  font-size:12px;
+  opacity:.75;
+  margin-bottom:4px;
+}
+
+.exchange-chart-kpi .v{
+  font-size:14px;
+  font-weight:800;
+}
+
+.exchange-chart-kpi.rising{
+  border-color:rgba(55,214,122,.45);
+  background:rgba(55,214,122,.08);
+}
+
+.exchange-chart-kpi.falling{
+  border-color:rgba(255,107,107,.45);
+  background:rgba(255,107,107,.08);
+}
+
+.exchange-chart-kpi.sideways{
+  border-color:rgba(255,204,102,.45);
+  background:rgba(255,204,102,.08);
+}
+
+.exchange-chart-wrap{
+  position:relative;
+  width:100%;
+  min-width:0;
+  height:420px;
+  border-radius:16px;
+  border:1px solid rgba(255,255,255,.08);
+  background:rgba(255,255,255,.02);
+  padding:12px;
+  overflow:hidden;
+}
+
+#maTrendChart{
+  display:block;
+  width:100% !important;
+  height:100% !important;
+}
+
+.exchange-legend-note{
+  margin-top:10px;
+  font-size:12px;
+  opacity:.82;
+}
+
+@media (max-width: 900px){
+  .exchange-service-grid{ grid-template-columns:1fr; }
+  .exchange-quick-grid{ grid-template-columns:repeat(2, minmax(120px, 1fr)); }
+  .exchange-chart-grid{ grid-template-columns:repeat(2, minmax(140px, 1fr)); }
+  .exchange-chart-wrap{ height:360px; }
+}
+{% endblock %}
+
+{% block content %}
+{% macro fmt(v, digits=4) -%}
+  {%- if v is undefined or v is none -%}
+    —
+  {%- else -%}
+    {{ ("{0:." ~ digits ~ "f}").format(v|float) }}
+  {%- endif -%}
+{%- endmacro %}
+
+<div class="exchange-detail-grid">
+
+  <div class="exchange-card">
+    <div class="exchange-title">Gyors állapot</div>
+    <div class="exchange-quick-grid">
+      <div class="exchange-pill"><span class="mono">Mód:</span> <strong id="top-mode">{{ state.get('freqtrade', {}).get('mode') or ('LIVE' if state.get('ft_dry_run') is sameas false else 'DRY-RUN') }}</strong></div>
+      <div class="exchange-pill"><span class="mono">Dry run:</span> <strong id="top-dry-run">{{ 'IGEN' if state.get('ft_dry_run') else 'NEM' }}</strong></div>
+      <div class="exchange-pill"><span class="mono">Pozíció:</span> <strong id="top-in-position">{{ 'VAN' if state.get('in_position') else 'NINCS' }}</strong></div>
+      <div class="exchange-pill"><span class="mono">Döntés:</span> <strong id="top-decision">{{ decision.get('action') or decision.get('decision_action') or '—' }}</strong></div>
+      <div class="exchange-pill"><span class="mono">USDC:</span> <strong id="top-balance-usdc">{{ fmt(state.get('balance_usdc'), 8) }}</strong></div>
+      <div class="exchange-pill"><span class="mono">{{ state.get('balance_base_symbol') or 'BASE' }}:</span> <strong id="top-balance-base">{{ fmt(state.get('balance_base'), 8) }}</strong></div>
+      <div class="exchange-pill"><span class="mono">Stake / trades:</span> <strong id="top-stake-open">{{ state.get('stake_amount') or state.get('ft_stake_amount') or '—' }} {{ state.get('stake_currency') or state.get('ft_stake_currency') or '' }} / {{ state.get('ft_open_trades_count') if state.get('ft_open_trades_count') is not none else '—' }}</strong></div>
+    </div>
+  </div>
+
+  <div class="exchange-card">
+    <div class="exchange-title">Szolgáltatásvezérlés</div>
+
+    <div class="exchange-service-grid">
+      <div class="exchange-card" style="padding:12px;">
+        <div class="exchange-title">Botmotor (runner)</div>
+        <div class="exchange-controls">
+          <span id="runner-active-pill" class="exchange-statuspill unknown">ismeretlen</span>
+          <span class="exchange-inline-muted mono" id="runner-enabled-text">enabled: —</span>
+          <span class="exchange-inline-muted mono" id="runner-substate-text">substate: —</span>
+        </div>
+        <div class="exchange-btnline" style="margin-top:12px;">
+          <button class="exchange-svcbtn start" onclick="controlService('runner','start')">Runner Start</button>
+          <button class="exchange-svcbtn stop" onclick="controlService('runner','stop')">Runner Stop</button>
+        </div>
+      </div>
+
+      <div class="exchange-card" style="padding:12px;">
+        <div class="exchange-title">Freqtrade</div>
+        <div class="exchange-controls">
+          <span id="freqtrade-active-pill" class="exchange-statuspill unknown">ismeretlen</span>
+          <span class="exchange-inline-muted mono" id="freqtrade-enabled-text">enabled: —</span>
+          <span class="exchange-inline-muted mono" id="freqtrade-substate-text">substate: —</span>
+        </div>
+        <div class="exchange-btnline" style="margin-top:12px;">
+          <button class="exchange-svcbtn start" onclick="controlService('freqtrade','start')">Freqtrade Start</button>
+          <button class="exchange-svcbtn stop" onclick="controlService('freqtrade','stop')">Freqtrade Stop</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="exchange-small-note mono" id="service-control-status">Várakozás...</div>
+  </div>
+
+  <div class="exchange-card">
+    <div class="exchange-title">Trend + MA chart</div>
+
+    <div class="exchange-chart-grid">
+      <div class="exchange-chart-kpi" id="trend-box">
+        <div class="k">Trend</div>
+        <div class="v" id="trend-text">—</div>
+      </div>
+
+      <div class="exchange-chart-kpi" id="panic-buy-box">
+        <div class="k">BUY_PANIC</div>
+        <div class="v" id="panic-buy-text">—</div>
+      </div>
+
+      <div class="exchange-chart-kpi" id="panic-sell-box">
+        <div class="k">SELL_PANIC</div>
+        <div class="v" id="panic-sell-text">—</div>
+      </div>
+
+      <div class="exchange-chart-kpi" id="panic-last-box">
+        <div class="k">Utolsó PANIC esemény</div>
+        <div class="v" id="panic-last-text">—</div>
+      </div>
+    </div>
+
+    <div class="exchange-chart-wrap">
+      <canvas id="maTrendChart"></canvas>
+    </div>
+
+    <div class="exchange-legend-note mono">
+      History: utolsó 10 nap a prices.csv alapján. A friss polling az aktuális state-ből frissít.
+      Görbék: Ár / 1 napos short MA / 10 napos long MA. A live threshold vonalak és a PANIC pontok külön jelennek meg.
+    </div>
+  </div>
+
+  <div class="exchange-card">
+    <div class="exchange-title">Árak</div>
+    <table class="exchange-table">
+      <tr><td>Bázis ár</td><td class="mono" id="field-base">{{ fmt(base, 4) }}</td></tr>
+      <tr><td>Utolsó ár</td><td class="mono" id="field-last">{{ fmt(last, 4) }}</td></tr>
+      <tr><td>Csúcs</td><td class="mono" id="field-peak">{{ fmt(peak, 4) }}</td></tr>
+      <tr><td>Mélypont</td><td class="mono" id="field-trough">{{ fmt(trough, 4) }}</td></tr>
+      <tr><td>Prev last</td><td class="mono" id="field-prev-last">{{ fmt(prev_last, 4) }}</td></tr>
+      <tr><td>Low</td><td class="mono" id="field-low">{{ fmt(lowp, 4) }}</td></tr>
+      <tr><td>Reference base</td><td class="mono" id="field-reference-base">{{ fmt(levels.get('reference_base') if levels.get('reference_base') is not none else thresholds.get('reference_base'), 4) }}</td></tr>
+      <tr><td>MA short</td><td class="mono" id="field-ma-short">{{ fmt(market.get('ma_short') if market.get('ma_short') is not none else state.get('ma_short'), 4) }}</td></tr>
+      <tr><td>MA long</td><td class="mono" id="field-ma-long">{{ fmt(market.get('ma_long') if market.get('ma_long') is not none else state.get('ma_long'), 4) }}</td></tr>
+      <tr><td>Trend state</td><td class="mono" id="field-trend-state">{{ decision.get('trend_state') or engine.get('trend_state') or '—' }}</td></tr>
+    </table>
+  </div>
+
+  <div class="exchange-card">
+    <div class="exchange-title">Célárak (V2)</div>
+    <table class="exchange-table">
+      <tr><td>Standard vétel</td><td class="mono" id="field-std-buy">{{ fmt(levels.get('std_buy') if levels.get('std_buy') is not none else thresholds.get('std_buy_level'), 4) }}</td></tr>
+      <tr><td>Recovery vétel</td><td class="mono" id="field-recovery-buy">{{ fmt(levels.get('recovery_buy') if levels.get('recovery_buy') is not none else thresholds.get('recovery_buy_level'), 4) }}</td></tr>
+      <tr><td>Pánikvisszavétel</td><td class="mono" id="field-panic-buy">{{ fmt(levels.get('panic_buy') if levels.get('panic_buy') is not none else thresholds.get('panic_buy_level'), 4) }}</td></tr>
+      <tr><td>Katasztrófa vételi zóna</td><td class="mono" id="field-catastrophe-buy">{{ fmt(levels.get('catastrophe_buy') if levels.get('catastrophe_buy') is not none else thresholds.get('catastrophe_buy_level'), 4) }}</td></tr>
+      <tr><td>Standard eladás</td><td class="mono" id="field-std-sell">{{ fmt(levels.get('std_sell') if levels.get('std_sell') is not none else thresholds.get('std_sell_level'), 4) }}</td></tr>
+      <tr><td>Recovery eladás</td><td class="mono" id="field-recovery-sell">{{ fmt(levels.get('recovery_sell') if levels.get('recovery_sell') is not none else thresholds.get('recovery_sell_level'), 4) }}</td></tr>
+      <tr><td>Pánikeladás</td><td class="mono" id="field-panic-sell">{{ fmt(levels.get('panic_sell') if levels.get('panic_sell') is not none else thresholds.get('panic_sell_level'), 4) }}</td></tr>
+      <tr><td>Katasztrófa eladási zóna</td><td class="mono" id="field-catastrophe-sell">{{ fmt(levels.get('catastrophe_sell') if levels.get('catastrophe_sell') is not none else thresholds.get('catastrophe_sell_level'), 4) }}</td></tr>
+    </table>
+  </div>
+
+  <div class="exchange-card">
+    <div class="exchange-title">Állapot</div>
+    <table class="exchange-table">
+      <tr><td>Pár</td><td class="mono" id="field-pair">{{ state.get('pair') or '—' }}</td></tr>
+      <tr><td>Mód</td><td class="mono" id="field-mode">{{ state.get('freqtrade', {}).get('mode') or ('LIVE' if state.get('ft_dry_run') is sameas false else 'DRY-RUN') }}</td></tr>
+      <tr><td>Dry run</td><td class="mono" id="field-dry-run">{{ 'IGEN' if state.get('ft_dry_run') else 'NEM' }}</td></tr>
+      <tr><td>Pozíció</td><td class="mono" id="field-in-position">{{ 'VAN' if state.get('in_position') else 'NINCS' }}</td></tr>
+      <tr><td>Döntés</td><td class="mono" id="field-decision">{{ decision.get('action') or decision.get('decision_action') or '—' }}</td></tr>
+      <tr><td>Szabály</td><td class="mono" id="field-rule">{{ decision.get('rule') or decision.get('decision_rule_id') or '—' }}</td></tr>
+      <tr><td>Indok</td><td class="mono" id="field-reason">{{ decision.get('reason') or decision.get('decision_reason') or '—' }}</td></tr>
+      <tr><td>Binance USDC</td><td class="mono" id="field-balance-usdc">{{ fmt(state.get('balance_usdc'), 8) }}</td></tr>
+      <tr><td>Binance {{ state.get('balance_base_symbol') or 'BASE' }}</td><td class="mono" id="field-balance-base">{{ fmt(state.get('balance_base'), 8) }}</td></tr>
+      <tr><td>Stake</td><td class="mono" id="field-stake">{{ state.get('stake_amount') or state.get('ft_stake_amount') or '—' }} {{ state.get('stake_currency') or state.get('ft_stake_currency') or '' }}</td></tr>
+      <tr><td>Nyitott trade-ek</td><td class="mono" id="field-open-trades">{{ state.get('ft_open_trades_count') if state.get('ft_open_trades_count') is not none else '—' }}</td></tr>
+      <tr><td>Trading mode</td><td class="mono" id="field-ft-trading-mode">{{ state.get('freqtrade', {}).get('trading_mode') or '—' }}</td></tr>
+      <tr><td>Recovery BUY armed</td><td class="mono" id="field-recovery-buy-armed">{{ levels.get('recovery_buy_armed') if levels.get('recovery_buy_armed') is not none else '—' }}</td></tr>
+      <tr><td>Recovery SELL armed</td><td class="mono" id="field-recovery-sell-armed">{{ levels.get('recovery_sell_armed') if levels.get('recovery_sell_armed') is not none else '—' }}</td></tr>
+      <tr><td>Számolva</td><td class="mono" id="field-computed-at">{{ levels.get('computed_at') or '—' }}</td></tr>
+    </table>
+  </div>
+
+</div>
+
+<script>
+(function() {
+  const POLL_MS = 3000;
+  const STATUS_URL = "/api/services";
+  const STATE_URL = "/api/state";
+  const HISTORY_URL = "/api/chart_history?days=10&short_days=1&long_days=10";
+  const controlStatusEl = document.getElementById("service-control-status");
+
+  const chartStore = {
+    labels: [],
+    price: [],
+    maShort: [],
+    maLong: [],
+    panicBuyLevel: [],
+    panicSellLevel: [],
+    stdBuyLevel: [],
+    stdSellLevel: [],
+    recoveryBuyLevel: [],
+    recoverySellLevel: [],
+    panicPoints: [],
+    lastPanicKey: null,
+    maxPoints: 16000,
+    historyLoaded: false
+  };
+
+  let maTrendChart = null;
+  let chartResizeTimer = null;
+
+  function setText(id, value) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = (value === null || value === undefined || value === "") ? "—" : String(value);
+  }
+
+  function setServicePill(prefix, activeValue) {
+    const el = document.getElementById(prefix + "-active-pill");
+    if (!el) return;
+    el.classList.remove("active", "inactive", "unknown");
+
+    if (activeValue === "active") {
+      el.classList.add("active");
+      el.textContent = "fut";
+    } else if (activeValue === "inactive") {
+      el.classList.add("inactive");
+      el.textContent = "áll";
+    } else {
+      el.classList.add("unknown");
+      el.textContent = activeValue || "ismeretlen";
+    }
+  }
+
+  function refreshServices(services) {
+    const runner = (services && services.runner) ? services.runner : {};
+    const freqtrade = (services && services.freqtrade) ? services.freqtrade : {};
+
+    setServicePill("runner", runner.active);
+    setText("runner-enabled-text", "enabled: " + (runner.enabled || "—"));
+    setText("runner-substate-text", "substate: " + (runner.substate || runner.active_state || "—"));
+
+    setServicePill("freqtrade", freqtrade.active);
+    setText("freqtrade-enabled-text", "enabled: " + (freqtrade.enabled || "—"));
+    setText("freqtrade-substate-text", "substate: " + (freqtrade.substate || freqtrade.active_state || "—"));
+  }
+
+  function fmtNum(v, digits=4) {
+    if (v === null || v === undefined || v === "") return "—";
+    const n = Number(v);
+    if (!Number.isFinite(n)) return String(v);
+    return n.toFixed(digits);
+  }
+
+  function fmtYesNo(v) {
+    if (v === true) return "IGEN";
+    if (v === false) return "NEM";
+    return "—";
+  }
+
+  function fmtPos(v) {
+    return v ? "VAN" : "NINCS";
+  }
+
+  function formatLabel(stamp) {
+    if (!stamp) return "";
+    const d = new Date(stamp);
+    if (Number.isNaN(d.getTime())) return String(stamp);
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mi = String(d.getMinutes()).padStart(2, "0");
+    return `${mm}.${dd} ${hh}:${mi}`;
+  }
+
+  function cleanSeries(arr) {
+    return arr.map(v => (v === null || v === undefined || Number.isNaN(Number(v))) ? null : Number(v));
+  }
+
+  const trendBackgroundPlugin = {
+    id: "trendBackgroundPlugin",
+    beforeDraw(chart) {
+      const ctx = chart.ctx;
+      const area = chart.chartArea;
+      if (!area) return;
+
+      const trendState = chart.$trendState || "SIDEWAYS";
+      let fill = "rgba(255,204,102,0.04)";
+      if (trendState === "RISING") fill = "rgba(55,214,122,0.05)";
+      if (trendState === "FALLING") fill = "rgba(255,107,107,0.05)";
+
+      ctx.save();
+      ctx.fillStyle = fill;
+      ctx.fillRect(area.left, area.top, area.right - area.left, area.bottom - area.top);
+      ctx.restore();
+    }
+  };
+
+  function ensureChart() {
+    if (maTrendChart) return maTrendChart;
+
+    const canvas = document.getElementById("maTrendChart");
+    if (!canvas || typeof Chart === "undefined") return null;
+
+    const ctx = canvas.getContext("2d");
+
+    maTrendChart = new Chart(ctx, {
+      plugins: [trendBackgroundPlugin],
+      type: "line",
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: "Ár",
+            data: [],
+            borderColor: "#4da3ff",
+            backgroundColor: "transparent",
+            borderWidth: 2,
+            tension: 0.1,
+            pointRadius: 0
+          },
+          {
+            label: "MA short (1 nap)",
+            data: [],
+            borderColor: "#37d67a",
+            backgroundColor: "transparent",
+            borderWidth: 2,
+            tension: 0.05,
+            pointRadius: 0
+          },
+          {
+            label: "MA long (10 nap)",
+            data: [],
+            borderColor: "#ffb020",
+            backgroundColor: "transparent",
+            borderWidth: 2,
+            tension: 0.05,
+            pointRadius: 0
+          },
+          {
+            label: "BUY_PANIC szint",
+            data: [],
+            borderColor: "#ff6b6b",
+            backgroundColor: "transparent",
+            borderWidth: 1.2,
+            borderDash: [6, 4],
+            pointRadius: 0,
+            tension: 0
+          },
+          {
+            label: "SELL_PANIC szint",
+            data: [],
+            borderColor: "#ffcc66",
+            backgroundColor: "transparent",
+            borderWidth: 1.2,
+            borderDash: [6, 4],
+            pointRadius: 0,
+            tension: 0
+          },
+          {
+            label: "STD_BUY szint",
+            data: [],
+            borderColor: "#66ccff",
+            backgroundColor: "transparent",
+            borderWidth: 1.1,
+            borderDash: [5, 5],
+            pointRadius: 0,
+            tension: 0
+          },
+          {
+            label: "STD_SELL szint",
+            data: [],
+            borderColor: "#3399ff",
+            backgroundColor: "transparent",
+            borderWidth: 1.1,
+            borderDash: [5, 5],
+            pointRadius: 0,
+            tension: 0
+          },
+          {
+            label: "RECOVERY_BUY szint",
+            data: [],
+            borderColor: "#00ffaa",
+            backgroundColor: "transparent",
+            borderWidth: 1.1,
+            borderDash: [3, 5],
+            pointRadius: 0,
+            tension: 0
+          },
+          {
+            label: "RECOVERY_SELL szint",
+            data: [],
+            borderColor: "#ff66cc",
+            backgroundColor: "transparent",
+            borderWidth: 1.1,
+            borderDash: [3, 5],
+            pointRadius: 0,
+            tension: 0
+          },
+          {
+            type: "scatter",
+            label: "PANIC pontok",
+            data: [],
+            borderColor: "#ff7b7b",
+            backgroundColor: "#ff7b7b",
+            pointRadius: 4,
+            pointHoverRadius: 5,
+            showLine: false
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        normalized: true,
+        interaction: {
+          mode: "index",
+          intersect: false
+        },
+        scales: {
+          x: {
+            ticks: {
+              color: "rgba(255,255,255,0.7)",
+              autoSkip: true,
+              maxTicksLimit: 12,
+              maxRotation: 0,
+              minRotation: 0
+            },
+            grid: {
+              color: "rgba(255,255,255,0.05)"
+            }
+          },
+          y: {
+            beginAtZero: false,
+            ticks: {
+              color: "rgba(255,255,255,0.7)"
+            },
+            grid: {
+              color: "rgba(255,255,255,0.05)"
+            }
+          }
+        },
+        plugins: {
+          legend: {
+            labels: {
+              color: "rgba(255,255,255,0.85)",
+              boxWidth: 24
+            }
+          }
+        }
+      }
+    });
+
+    return maTrendChart;
+  }
+
+  function scheduleChartResize() {
+    const chart = ensureChart();
+    if (!chart) return;
+
+    if (chartResizeTimer) clearTimeout(chartResizeTimer);
+
+    chartResizeTimer = setTimeout(() => {
+      try {
+        chart.resize();
+        chart.update("none");
+      } catch (_) {}
+    }, 60);
+  }
+
+  function syncChartFromStore() {
+    const chart = ensureChart();
+    if (!chart) return;
+
+    chart.data.labels = chartStore.labels.slice();
+    chart.data.datasets[0].data = cleanSeries(chartStore.price);
+    chart.data.datasets[1].data = cleanSeries(chartStore.maShort);
+    chart.data.datasets[2].data = cleanSeries(chartStore.maLong);
+    chart.data.datasets[3].data = cleanSeries(chartStore.panicBuyLevel);
+    chart.data.datasets[4].data = cleanSeries(chartStore.panicSellLevel);
+    chart.data.datasets[5].data = cleanSeries(chartStore.stdBuyLevel);
+    chart.data.datasets[6].data = cleanSeries(chartStore.stdSellLevel);
+    chart.data.datasets[7].data = cleanSeries(chartStore.recoveryBuyLevel);
+    chart.data.datasets[8].data = cleanSeries(chartStore.recoverySellLevel);
+    chart.data.datasets[9].data = chartStore.panicPoints.slice();
+
+    chart.update("none");
+    scheduleChartResize();
+  }
+
+  async function loadChartHistory() {
+    try {
+      const r = await fetch(HISTORY_URL, { cache: "no-store" });
+      if (!r.ok) return;
+      const payload = await r.json();
+      if (!payload || !payload.ok) return;
+
+      chartStore.labels = (payload.labels || []).map(formatLabel);
+      chartStore.price = (payload.price || []).slice();
+      chartStore.maShort = (payload.ma_short || []).slice();
+      chartStore.maLong = (payload.ma_long || []).slice();
+
+      const n = chartStore.labels.length;
+      chartStore.panicBuyLevel = Array(n).fill(null);
+      chartStore.panicSellLevel = Array(n).fill(null);
+      chartStore.stdBuyLevel = Array(n).fill(null);
+      chartStore.stdSellLevel = Array(n).fill(null);
+      chartStore.recoveryBuyLevel = Array(n).fill(null);
+      chartStore.recoverySellLevel = Array(n).fill(null);
+      chartStore.panicPoints = [];
+      chartStore.lastPanicKey = null;
+      chartStore.historyLoaded = true;
+
+      syncChartFromStore();
+    } catch (_) {}
+  }
+
+  function setTrendBoxClass(el, trendState) {
+    if (!el) return;
+    el.classList.remove("rising", "falling", "sideways");
+    if (trendState === "RISING") el.classList.add("rising");
+    else if (trendState === "FALLING") el.classList.add("falling");
+    else el.classList.add("sideways");
+  }
+
+  function updateTrendBoxes(data) {
+    const decision = (data && data.decision) ? data.decision : {};
+    const trendState = decision.trend_state || ((data && data.engine) ? data.engine.trend_state : null) || "—";
+    const lastAction = String(decision.action || "").toUpperCase();
+
+    const panic = {
+      buy: trendState === "RISING" ? "AKTÍV" : "TILTVA",
+      sell: trendState === "FALLING" ? "AKTÍV" : "TILTVA"
+    };
+
+    setText("trend-text", trendState === "RISING" ? "EMELKEDŐ" : (trendState === "FALLING" ? "ESŐ" : (trendState === "SIDEWAYS" ? "OLDALAZÓ" : trendState)));
+    setText("panic-buy-text", panic.buy);
+    setText("panic-sell-text", panic.sell);
+    setText("panic-last-text", lastAction.includes("PANIC") ? lastAction : "NINCS");
+
+    setTrendBoxClass(document.getElementById("trend-box"), trendState);
+    setTrendBoxClass(document.getElementById("panic-buy-box"), trendState === "RISING" ? "RISING" : "SIDEWAYS");
+    setTrendBoxClass(document.getElementById("panic-sell-box"), trendState === "FALLING" ? "FALLING" : "SIDEWAYS");
+    setTrendBoxClass(document.getElementById("panic-last-box"), lastAction.includes("PANIC") ? "RISING" : "SIDEWAYS");
+
+    const chart = ensureChart();
+    if (chart) chart.$trendState = trendState;
+  }
+
+  function appendOrUpdateLivePoint(data) {
+    const market = (data && data.market) ? data.market : {};
+    const decision = (data && data.decision) ? data.decision : {};
+    const thresholds = (decision && decision.thresholds) ? decision.thresholds : (((data && data.engine) ? data.engine.thresholds : null) || {});
+
+    const rawStamp = market.last_candle_time || data.time || new Date().toISOString();
+    const label = formatLabel(rawStamp);
+
+    const last = market.last ?? data.last ?? null;
+    const maShort = market.ma_short ?? data.ma_short ?? null;
+    const maLong = market.ma_long ?? data.ma_long ?? null;
+
+    const panicBuyLevel = thresholds.panic_buy_level ?? null;
+    const panicSellLevel = thresholds.panic_sell_level ?? null;
+    const stdBuyLevel = thresholds.std_buy_level ?? null;
+    const stdSellLevel = thresholds.std_sell_level ?? null;
+    const recoveryBuyLevel = thresholds.recovery_buy_level ?? null;
+    const recoverySellLevel = thresholds.recovery_sell_level ?? null;
+
+    const sameLastLabel = chartStore.labels.length > 0 && chartStore.labels[chartStore.labels.length - 1] === label;
+
+    if (sameLastLabel) {
+      chartStore.price[chartStore.price.length - 1] = last;
+      chartStore.maShort[chartStore.maShort.length - 1] = maShort;
+      chartStore.maLong[chartStore.maLong.length - 1] = maLong;
+      chartStore.panicBuyLevel[chartStore.panicBuyLevel.length - 1] = panicBuyLevel;
+      chartStore.panicSellLevel[chartStore.panicSellLevel.length - 1] = panicSellLevel;
+      chartStore.stdBuyLevel[chartStore.stdBuyLevel.length - 1] = stdBuyLevel;
+      chartStore.stdSellLevel[chartStore.stdSellLevel.length - 1] = stdSellLevel;
+      chartStore.recoveryBuyLevel[chartStore.recoveryBuyLevel.length - 1] = recoveryBuyLevel;
+      chartStore.recoverySellLevel[chartStore.recoverySellLevel.length - 1] = recoverySellLevel;
+    } else {
+      chartStore.labels.push(label);
+      chartStore.price.push(last);
+      chartStore.maShort.push(maShort);
+      chartStore.maLong.push(maLong);
+      chartStore.panicBuyLevel.push(panicBuyLevel);
+      chartStore.panicSellLevel.push(panicSellLevel);
+      chartStore.stdBuyLevel.push(stdBuyLevel);
+      chartStore.stdSellLevel.push(stdSellLevel);
+      chartStore.recoveryBuyLevel.push(recoveryBuyLevel);
+      chartStore.recoverySellLevel.push(recoverySellLevel);
+    }
+
+    const panicAction = String(decision.action || "").toUpperCase();
+    const panicKey = panicAction.includes("PANIC") ? (label + "|" + panicAction + "|" + String(last)) : null;
+
+    if (panicKey && panicKey !== chartStore.lastPanicKey && last !== null && last !== undefined) {
+      chartStore.panicPoints.push({ x: label, y: Number(last) });
+      chartStore.lastPanicKey = panicKey;
+    }
+
+    while (chartStore.labels.length > chartStore.maxPoints) {
+      chartStore.labels.shift();
+      chartStore.price.shift();
+      chartStore.maShort.shift();
+      chartStore.maLong.shift();
+      chartStore.panicBuyLevel.shift();
+      chartStore.panicSellLevel.shift();
+      chartStore.stdBuyLevel.shift();
+      chartStore.stdSellLevel.shift();
+      chartStore.recoveryBuyLevel.shift();
+      chartStore.recoverySellLevel.shift();
+    }
+
+    while (chartStore.panicPoints.length > 200) {
+      chartStore.panicPoints.shift();
+    }
+
+    syncChartFromStore();
+  }
+
+  function updateStateView(data) {
+    const market = (data && data.market) ? data.market : {};
+    const levels = (data && data.levels) ? data.levels : {};
+    const decision = (data && data.decision) ? data.decision : {};
+    const engine = (data && data.engine) ? data.engine : {};
+    const thresholds = (decision && decision.thresholds) ? decision.thresholds : (engine.thresholds || {});
+    const freqtrade = (data && data.freqtrade) ? data.freqtrade : {};
+
+    setText("field-base", fmtNum(data.base, 4));
+    setText("field-last", fmtNum(market.last ?? data.last, 4));
+    setText("field-peak", fmtNum(data.peak, 4));
+    setText("field-trough", fmtNum(data.trough, 4));
+    setText("field-prev-last", fmtNum(market.prev_last ?? data.prev_last, 4));
+    setText("field-low", fmtNum(market.low ?? data.low, 4));
+    setText("field-reference-base", fmtNum(levels.reference_base ?? thresholds.reference_base, 4));
+    setText("field-ma-short", fmtNum(market.ma_short ?? data.ma_short, 4));
+    setText("field-ma-long", fmtNum(market.ma_long ?? data.ma_long, 4));
+    setText("field-trend-state", decision.trend_state || engine.trend_state || "—");
+
+    setText("field-std-buy", fmtNum(levels.std_buy ?? thresholds.std_buy_level, 4));
+    setText("field-recovery-buy", fmtNum(levels.recovery_buy ?? thresholds.recovery_buy_level, 4));
+    setText("field-panic-buy", fmtNum(levels.panic_buy ?? thresholds.panic_buy_level, 4));
+    setText("field-catastrophe-buy", fmtNum(levels.catastrophe_buy ?? thresholds.catastrophe_buy_level, 4));
+    setText("field-std-sell", fmtNum(levels.std_sell ?? thresholds.std_sell_level, 4));
+    setText("field-recovery-sell", fmtNum(levels.recovery_sell ?? thresholds.recovery_sell_level, 4));
+    setText("field-panic-sell", fmtNum(levels.panic_sell ?? thresholds.panic_sell_level, 4));
+    setText("field-catastrophe-sell", fmtNum(levels.catastrophe_sell ?? thresholds.catastrophe_sell_level, 4));
+
+    setText("field-pair", data.pair || "—");
+    setText("field-mode", freqtrade.mode || (data.ft_dry_run === false ? "LIVE" : "DRY-RUN"));
+    setText("field-dry-run", fmtYesNo(data.ft_dry_run));
+    setText("field-in-position", fmtPos(Boolean(data.in_position)));
+    setText("field-decision", decision.action || decision.decision_action || "—");
+    setText("field-rule", decision.rule || decision.decision_rule_id || "—");
+    setText("field-reason", decision.reason || decision.decision_reason || "—");
+    setText("field-balance-usdc", fmtNum(data.balance_usdc, 8));
+    setText("field-balance-base", fmtNum(data.balance_base, 8));
+
+    const stakeAmount = data.stake_amount ?? data.ft_stake_amount ?? "—";
+    const stakeCurrency = data.stake_currency ?? data.ft_stake_currency ?? "";
+    setText("field-stake", String(stakeAmount) + (stakeCurrency ? " " + stakeCurrency : ""));
+    setText("field-open-trades", data.ft_open_trades_count ?? "—");
+    setText("field-ft-trading-mode", freqtrade.trading_mode || "—");
+    setText("field-recovery-buy-armed", levels.recovery_buy_armed ?? "—");
+    setText("field-recovery-sell-armed", levels.recovery_sell_armed ?? "—");
+    setText("field-computed-at", levels.computed_at || "—");
+
+    setText("top-mode", freqtrade.mode || (data.ft_dry_run === false ? "LIVE" : "DRY-RUN"));
+    setText("top-dry-run", fmtYesNo(data.ft_dry_run));
+    setText("top-in-position", fmtPos(Boolean(data.in_position)));
+    setText("top-decision", decision.action || decision.decision_action || "—");
+    setText("top-balance-usdc", fmtNum(data.balance_usdc, 8));
+    setText("top-balance-base", fmtNum(data.balance_base, 8));
+    setText("top-stake-open", String(stakeAmount) + (stakeCurrency ? " " + stakeCurrency : "") + " / " + (data.ft_open_trades_count ?? "—"));
+
+    const topPill = document.getElementById("top-position-pill");
+    if (topPill) {
+      topPill.textContent = "pozíció: " + fmtPos(Boolean(data.in_position));
+    }
+
+    updateTrendBoxes(data);
+    appendOrUpdateLivePoint(data);
+  }
+
+  async function pollState() {
+    try {
+      const r = await fetch(STATE_URL, { cache: "no-store" });
+      if (!r.ok) return;
+      const payload = await r.json();
+      updateStateView(payload || {});
+    } catch (_) {}
+  }
+
+  async function pollServices() {
+    try {
+      const r = await fetch(STATUS_URL, { cache: "no-store" });
+      if (!r.ok) {
+        if (controlStatusEl) controlStatusEl.textContent = "Szolgáltatásfrissítési hiba: HTTP " + r.status;
+        return;
+      }
+      const payload = await r.json();
+      refreshServices(payload.services || {});
+      if (controlStatusEl) {
+        controlStatusEl.textContent = "Utolsó szolgáltatásfrissítés: " + new Date().toLocaleTimeString("hu-HU");
+      }
+    } catch (_) {
+      if (controlStatusEl) controlStatusEl.textContent = "Szolgáltatásfrissítési hiba";
+    }
+  }
+
+  window.controlService = async function(target, action) {
+    try {
+      if (controlStatusEl) {
+        controlStatusEl.textContent = "Kérés folyamatban: " + target + " / " + action;
+      }
+
+      const r = await fetch(`/ui/control/${target}/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+      });
+
+      let payload = {};
+      try {
+        payload = await r.json();
+      } catch (_) {}
+
+      if (!r.ok || !payload.ok) {
+        if (controlStatusEl) {
+          controlStatusEl.textContent = "Hiba: " + (payload.error || JSON.stringify(payload) || ("HTTP " + r.status));
+        }
+        await pollServices();
+        return;
+      }
+
+      refreshServices(payload.services || {});
+      if (controlStatusEl) {
+        controlStatusEl.textContent = "Sikeres művelet: " + target + " / " + action + " / " + new Date().toLocaleTimeString("hu-HU");
+      }
+      await pollServices();
+      await pollState();
+    } catch (_) {
+      if (controlStatusEl) {
+        controlStatusEl.textContent = "Vezérlési hiba";
+      }
+      await pollServices();
+    }
+  };
+
+  async function boot() {
+    ensureChart();
+    await loadChartHistory();
+    await pollServices();
+    await pollState();
+    setInterval(pollServices, POLL_MS);
+    setInterval(pollState, POLL_MS);
+  }
+
+  boot();
+})();
+</script>
+{% endblock %}

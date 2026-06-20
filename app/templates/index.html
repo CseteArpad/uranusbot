@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8">
+  <title>Uranus UI</title>
+</head>
+<body>
+  <h1>Uranus UI</h1>
+  <p>Az index sablon most lett létrehozva, hogy a főoldal ne dobjon 500-at.</p>
+
+  {% if exchanges %}
+    <h2>Exchanges</h2>
+    <ul>
+      {% for ex in exchanges %}
+        <li><a href="{{ url_for('exchange_detail', name=ex) }}">{{ ex }}</a></li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  {% if exchanges_view %}
+    <h2>Exchange view</h2>
+    <ul>
+      {% for k,v in exchanges_view.items() %}
+        <li><a href="{{ url_for('exchange_detail', name=k) }}">{{ k }}</a></li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+</body>
+</html>

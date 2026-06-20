@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>{% block title %}Uranus Bot{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    :root{
+      --bg:#0b1220;
+      --panel:#101b33;
+      --panel2:#0f1a30;
+      --text:#e7eefc;
+      --muted:#9db0d1;
+      --line:rgba(255,255,255,.08);
+      --good:#39d98a;
+      --bad:#ff5c5c;
+      --warn:#ffcc66;
+      --chip:#0c1730;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+      --shadow: 0 12px 30px rgba(0,0,0,.35);
+      --radius: 16px;
+    }
+
+    *{ box-sizing:border-box; }
+    html,body{ height:100%; }
+
+    body{
+      margin:0;
+      font-family:var(--sans);
+      background:
+        radial-gradient(1200px 600px at 20% 0%, rgba(57,217,138,.08), transparent 60%),
+        radial-gradient(1200px 600px at 80% 20%, rgba(122,92,255,.10), transparent 55%),
+        var(--bg);
+      color:var(--text);
+    }
+
+    a{ color:inherit; text-decoration:none; }
+
+    .wrap{
+      max-width:1100px;
+      margin:0 auto;
+      padding:18px 16px 28px;
+    }
+
+    .topbar{
+      display:flex;
+      gap:12px;
+      align-items:center;
+      justify-content:space-between;
+      padding:12px 14px;
+      border:1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01));
+      box-shadow: var(--shadow);
+      flex-wrap:wrap;
+    }
+
+    .brand{
+      display:flex;
+      flex-direction:column;
+      gap:2px;
+      min-width:0;
+    }
+
+    .brand .h{
+      font-size:16px;
+      font-weight:700;
+      letter-spacing:.2px;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+
+    .brand .s{
+      font-size:12px;
+      color:var(--muted);
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+
+    .pill{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding:6px 10px;
+      border-radius:999px;
+      border:1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.04);
+      font-size:12px;
+      white-space:nowrap;
+    }
+
+    .dot{
+      width:10px;
+      height:10px;
+      border-radius:50%;
+      background:#2c5d5d;
+      display:inline-block;
+    }
+
+    .dot.ok{ background: var(--good); }
+    .dot.bad{ background: var(--bad); }
+    .dot.warn{ background: var(--warn); }
+    .dot.gray{ background: rgba(157,176,209,.55); }
+
+    .grid{
+      margin-top:14px;
+      display:grid;
+      grid-template-columns: 1fr;
+      gap:14px;
+    }
+
+    .card{
+      padding:14px 14px;
+      border-radius: var(--radius);
+      border:1px solid var(--line);
+      background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01));
+      box-shadow: var(--shadow);
+    }
+
+    .title{
+      font-size:14px;
+      font-weight:800;
+      letter-spacing:.2px;
+      margin:0 0 10px 0;
+    }
+
+    .muted{ color: var(--muted); }
+    .mono{ font-family:var(--mono); }
+
+    .kpi{
+      display:grid;
+      grid-template-columns: 210px 1fr;
+      gap:10px 12px;
+      align-items:center;
+      font-size:13px;
+    }
+
+    .kpi .k{ color: var(--muted); }
+    .kpi .v{ font-family:var(--mono); font-size:13px; }
+
+    .baseprice-current{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      font-family:var(--mono);
+      font-weight:700;
+      font-size:13px;
+      padding:2px 10px;
+      border-radius:999px;
+      border:1px solid var(--line);
+      background: rgba(0,0,0,.18);
+      white-space:nowrap;
+    }
+
+    .baseprice-current.is-up{
+      color: var(--good);
+      border-color: rgba(57,217,138,.35);
+      background: rgba(57,217,138,.12);
+    }
+
+    .baseprice-current.is-down{
+      color: var(--bad);
+      border-color: rgba(255,92,92,.35);
+      background: rgba(255,92,92,.10);
+    }
+
+    .baseprice-delta{
+      font-family:var(--mono);
+      font-size:12px;
+      margin-left:6px;
+      color: var(--muted);
+      white-space:nowrap;
+    }
+
+    .baseprice-delta.pos{ color: var(--good); }
+    .baseprice-delta.neg{ color: var(--bad); }
+
+    .header-right{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+    }
+
+    .nav{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      padding:6px 8px;
+      border:1px solid rgba(255,255,255,.10);
+      background: rgba(255,255,255,.03);
+      border-radius:999px;
+      flex-wrap:wrap;
+    }
+
+    .nav a{
+      padding:6px 10px;
+      border-radius:999px;
+      font-size:12px;
+      color: var(--muted);
+      border:1px solid transparent;
+    }
+
+    .nav a:hover{
+      color: var(--text);
+      border-color: rgba(255,255,255,.10);
+      background: rgba(255,255,255,.04);
+    }
+
+    .btn{
+      border:1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.04);
+      color: var(--text);
+      padding:8px 12px;
+      border-radius:12px;
+      font-size:12px;
+      cursor:pointer;
+      box-shadow: 0 10px 22px rgba(0,0,0,.25);
+    }
+
+    .btn:hover{ background: rgba(255,255,255,.06); }
+    .btn-good{ border-color: rgba(57,217,138,.35); }
+    .btn-bad{ border-color: rgba(255,92,92,.35); }
+
+    .footer{
+      margin-top:16px;
+      color: rgba(157,176,209,.7);
+      font-size:12px;
+      text-align:center;
+    }
+
+    {% block extra_css %}{% endblock %}
+  </style>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  {% block extra_head %}{% endblock %}
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <div class="brand">
+        <div class="h">{% block brand_title %}Uranus Bot{% endblock %}</div>
+        <div class="s">
+          {% block brand_subtitle %}
+            <span class="mono muted">
+              UI: {{ ui.time_utc if ui is defined else "-" }} •
+              State: {{ ui.state_error if ui is defined and ui.state_error else "OK" }}
+            </span>
+          {% endblock %}
+        </div>
+      </div>
+
+      <div class="header-right">
+        <div class="nav">
+          <a href="/exchange/binance">Binance</a>
+          <a href="/settings">Beállítások</a>
+          <a href="/naplo/">Monitor</a>
+          <a href="/naplo/elemzes">Stratégia-labor</a>
+        </div>
+
+        {% block header_right %}{% endblock %}
+      </div>
+    </div>
+
+    {% block top_status %}{% endblock %}
+
+<!-- GLOBAL_DECISION_BAR_START -->
+<style>
+  .global-decision-bar{
+    margin: 10px 0 14px 0;
+    padding: 10px 14px;
+    border: 1px solid rgba(120,160,255,.22);
+    border-radius: 16px;
+    background: linear-gradient(90deg, rgba(10,20,40,.86), rgba(20,30,60,.72));
+    box-shadow: 0 8px 24px rgba(0,0,0,.18);
+  }
+  .global-decision-grid{
+    display:grid;
+    grid-template-columns: repeat(5, minmax(160px,1fr));
+    gap:10px;
+    align-items:start;
+  }
+  .global-decision-item{
+    min-width:0;
+  }
+  .global-decision-k{
+    font-size:12px;
+    opacity:.75;
+    margin-bottom:4px;
+  }
+  .global-decision-v{
+    font-size:14px;
+    font-weight:700;
+    word-break:break-word;
+  }
+  .gdb-badge{
+    display:inline-block;
+    padding:4px 10px;
+    border-radius:999px;
+    border:1px solid rgba(255,255,255,.18);
+    font-size:13px;
+    font-weight:700;
+    line-height:1.2;
+  }
+  .gdb-blue{ color:#93c5fd; border-color:rgba(147,197,253,.55); background:rgba(59,130,246,.10); }
+  .gdb-green{ color:#86efac; border-color:rgba(134,239,172,.55); background:rgba(34,197,94,.10); }
+  .gdb-yellow{ color:#fde68a; border-color:rgba(253,230,138,.55); background:rgba(234,179,8,.12); }
+  .gdb-red{ color:#fca5a5; border-color:rgba(252,165,165,.55); background:rgba(239,68,68,.12); }
+  .gdb-muted{ color:#cbd5e1; border-color:rgba(203,213,225,.30); background:rgba(148,163,184,.08); }
+
+  @media (max-width: 1100px){
+    .global-decision-grid{ grid-template-columns: repeat(2, minmax(180px,1fr)); }
+  }
+  @media (max-width: 700px){
+    .global-decision-grid{ grid-template-columns: 1fr; }
+  }
+</style>
+
+<div id="global-decision-bar" class="global-decision-bar" style="display:none;">
+  <div class="global-decision-grid">
+    <div class="global-decision-item">
+      <div class="global-decision-k">Mód</div>
+      <div id="gdb-mode" class="global-decision-v">—</div>
+    </div>
+    <div class="global-decision-item">
+      <div class="global-decision-k">Aktuális döntés</div>
+      <div id="gdb-decision" class="global-decision-v">—</div>
+    </div>
+    <div class="global-decision-item">
+      <div class="global-decision-k">Alert zóna</div>
+      <div id="gdb-alert" class="global-decision-v">—</div>
+    </div>
+    <div class="global-decision-item">
+      <div class="global-decision-k">Legközelebbi trigger</div>
+      <div id="gdb-nearest" class="global-decision-v">—</div>
+    </div>
+    <div class="global-decision-item">
+      <div class="global-decision-k">Következő lépés</div>
+      <div id="gdb-next" class="global-decision-v">—</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const STATE_URL = "/api/state";
+  const POLL_MS = 2000;
+
+  function byId(id){ return document.getElementById(id); }
+  function setText(id, value){
+    const el = byId(id);
+    if (!el) return;
+    el.textContent = (value === null || value === undefined || value === "") ? "—" : String(value);
+  }
+  function setHtml(id, value){
+    const el = byId(id);
+    if (!el) return;
+    el.innerHTML = value;
+  }
+  function f(v){
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  function pct(v){
+    const n = Number(v);
+    return Number.isFinite(n) ? n.toFixed(3) + "%" : "—";
+  }
+  function proximityDown(last, level){
+    const l = f(last), t = f(level);
+    if (l === null || t === null || l <= 0) return null;
+    return ((l - t) / l) * 100.0;
+  }
+  function proximityUp(last, level){
+    const l = f(last), t = f(level);
+    if (l === null || t === null || l <= 0) return null;
+    return ((t - l) / l) * 100.0;
+  }
+  function badge(text, cls){
+    return '<span class="gdb-badge ' + cls + '">' + text + '</span>';
+  }
+  function alertBadge(distance){
+    if (distance === null) return badge("NINCS AKTÍV", "gdb-muted");
+    if (distance <= 0.30) return badge("ALERT ZÓNA (" + pct(distance) + ")", "gdb-red");
+    if (distance <= 1.00) return badge("KÖZEL (" + pct(distance) + ")", "gdb-yellow");
+    return badge("MÉG TÁVOL (" + pct(distance) + ")", "gdb-blue");
+  }
+
+  function computeDecisionSummary(data){
+    const levels = (data && data.levels && typeof data.levels === "object") ? data.levels : {};
+    const flags = (data && data.flags && typeof data.flags === "object") ? data.flags : {};
+
+    const inPosition = !!data.in_position;
+    const last = f(data.last);
+    const prevLast = f(data.prev_last);
+    const falling = (last !== null && prevLast !== null) ? (last < prevLast) : false;
+    const rising = (last !== null && prevLast !== null) ? (last > prevLast) : false;
+
+    const base = f(data.base);
+    
+    const stdSell = f(levels.std_sell);
+    const profitlessSell = f(levels.profitless_sell);
+    const panicSell = f(levels.panic_sell);
+    
+    const stdBuy = f(levels.std_buy);
+    const profitlessBuy = f(levels.profitless_buy);
+    const panicBuy = f(levels.panic_buy);
+    
+    const hadEnoughRise = !!(data.had_enough_rise ?? flags.had_enough_rise);
+    const notEnoughRise = !!(data.not_enough_rise ?? flags.not_enough_rise);
+    const hadEnoughDrop = !!(data.had_enough_drop ?? flags.had_enough_drop);
+    const notEnoughDrop = !!(data.not_enough_drop ?? flags.not_enough_drop);
+    let mode = inPosition ? "SELL oldal (pozíció van)" : "BUY oldal (pozíció nincs)";
+    let currentDecision = String(data.decision_reason || data.reason || "—");
+
+    let candidates = [];
+
+    if (inPosition) {
+      if (panicSell !== null) {
+        const dist = proximityDown(last, panicSell);
+        candidates.push({rule:"PANIC_SELL", dist, active:true});
+      }
+      if (profitlessSell !== null) {
+        const active = !!notEnoughRise && base !== null && profitlessSell > base;
+        const dist = proximityDown(last, profitlessSell);
+        candidates.push({rule:"PROFITLESS_SELL", dist, active});
+      }
+      if (stdSell !== null) {
+        const active = !!hadEnoughRise;
+        const dist = proximityDown(last, stdSell);
+        candidates.push({rule:"STANDARD_SELL", dist, active});
+      }
+    } else {
+      if (panicBuy !== null) {
+        const active = base !== null ? panicBuy > base : true;
+        const dist = proximityUp(last, panicBuy);
+        candidates.push({rule:"PANIC_BUY", dist, active});
+      }
+      if (profitlessBuy !== null) {
+        const active = !!notEnoughDrop && base !== null && profitlessBuy < base;
+        const dist = proximityUp(last, profitlessBuy);
+        candidates.push({rule:"PROFITLESS_BUY", dist, active});
+      }
+      if (stdBuy !== null) {
+        const active = !!hadEnoughDrop;
+        const dist = proximityUp(last, stdBuy);
+        candidates.push({rule:"STANDARD_BUY", dist, active});
+      }
+    }
+
+    const activeCandidates = candidates.filter(x => x.active && x.dist !== null && x.dist >= 0);
+    activeCandidates.sort((a, b) => a.dist - b.dist);
+
+    let nearest = null;
+    if (activeCandidates.length > 0) nearest = activeCandidates[0];
+
+    let nextText = "—";
+    if (nearest) {
+      if (nearest.rule.endsWith("_SELL")) {
+        const target =
+          nearest.rule === "PANIC_SELL" ? panicSell :
+          nearest.rule === "PROFITLESS_SELL" ? profitlessSell :
+          stdSell;
+        nextText = "VÁR: " + nearest.rule + " " + String(target) + " alatt aktiválódik | még " + pct(nearest.dist);
+      } else {
+        const target =
+          nearest.rule === "PANIC_BUY" ? panicBuy :
+          nearest.rule === "PROFITLESS_BUY" ? profitlessBuy :
+          stdBuy;
+        nextText = "VÁR: " + nearest.rule + " " + String(target) + " felett aktiválódik | még " + pct(nearest.dist);
+      }
+    } else if (inPosition) {
+      nextText = "Nincs aktív SELL trigger";
+    } else {
+      nextText = "Nincs aktív BUY trigger";
+    }
+
+    return {
+      mode,
+      currentDecision,
+      nearest,
+      nextText
+    };
+  }
+
+  async function refreshGlobalDecisionBar(){
+    try{
+      const res = await fetch(STATE_URL, {cache: "no-store"});
+      const data = await res.json();
+      const summary = computeDecisionSummary(data);
+
+      const bar = byId("global-decision-bar");
+      if (bar) bar.style.display = "";
+
+      setText("gdb-mode", summary.mode);
+      setText("gdb-decision", summary.currentDecision);
+
+      if (summary.nearest) {
+        const cls = summary.nearest.dist <= 0.30 ? "gdb-red" : (summary.nearest.dist <= 1.00 ? "gdb-yellow" : "gdb-blue");
+        setHtml("gdb-alert", alertBadge(summary.nearest.dist));
+        setHtml("gdb-nearest", badge(summary.nearest.rule + " (" + pct(summary.nearest.dist) + ")", cls));
+      } else {
+        setHtml("gdb-alert", badge("NINCS AKTÍV", "gdb-muted"));
+        setHtml("gdb-nearest", badge("—", "gdb-muted"));
+      }
+
+      setText("gdb-next", summary.nextText);
+    } catch(e){
+      const bar = byId("global-decision-bar");
+      if (bar) bar.style.display = "";
+      setText("gdb-mode", "—");
+      setText("gdb-decision", "Állapotlekérési hiba");
+      setHtml("gdb-alert", badge("HIBA", "gdb-red"));
+      setHtml("gdb-nearest", badge("—", "gdb-muted"));
+      setText("gdb-next", String(e));
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", function(){
+      refreshGlobalDecisionBar();
+      setInterval(refreshGlobalDecisionBar, POLL_MS);
+    });
+  } else {
+    refreshGlobalDecisionBar();
+    setInterval(refreshGlobalDecisionBar, POLL_MS);
+  }
+})();
+</script>
+<!-- GLOBAL_DECISION_BAR_END -->
+
+    <div class="grid">
+      {% block content %}{% endblock %}
+    </div>
+
+    <div class="footer">
+      {% block footer %}{% endblock %}
+    </div>
+  </div>
+
+  {% block extra_js %}
+  {% endblock %}
+
+
+
+
+<script>
+(function(){
+  function cleanupUranusHeader(){
+    const hideLabels = [
+      "Alert zóna",
+      "Legközelebbi trigger",
+      "Következő lépés"
+    ];
+
+    document.querySelectorAll(".global-decision-k").forEach(function(el){
+      const txt = (el.textContent || "").trim();
+      if (hideLabels.includes(txt)) {
+        const box = el.closest("div");
+        if (box && box.parentElement) {
+          box.parentElement.style.display = "none";
+        }
+      }
+    });
+
+    document.querySelectorAll("*").forEach(function(el){
+      if (!el.children.length && el.textContent) {
+        el.textContent = el.textContent
+          .replace(/ALERT ZÓNA\s*\([^)]*\)/g, "")
+          .replace(/VÁR:\s*PANIC SELL[^<]*/g, "")
+          .replace(/PANIC_SELL\s*\([^)]*\)/g, "");
+      }
+    });
+  }
+
+  document.addEventListener("DOMContentLoaded", cleanupUranusHeader);
+  setInterval(cleanupUranusHeader, 2000);
+})();
+</script>
+
+</body>
+</html>

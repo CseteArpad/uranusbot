@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="refresh" content="10">
+  <title>Uranus – Áttekintő</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:20px;background:#fafafa;color:#111}
+    h1{margin:0 0 14px 0}
+    .grid{display:grid;grid-template-columns:repeat(3,minmax(260px,1fr));gap:14px}
+    .card{background:#fff;border:1px solid #e5e5e5;border-radius:10px;padding:14px}
+    .k{color:#555;font-size:13px;margin-bottom:6px}
+    .v{font-size:20px;font-weight:700}
+    .ok{color:#0a7a2f}
+    .bad{color:#b00020}
+    .muted{color:#666;font-size:13px}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px;white-space:pre-wrap}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    .pill{padding:4px 8px;border-radius:999px;border:1px solid #ddd;background:#f6f6f6;font-size:12px}
+  </style>
+</head>
+<body>
+
+  <h1>Uranus – Áttekintő</h1>
+  <div class="muted">Frissül: 10 másodpercenként</div>
+
+  {% set err = (data.get("errors") or {}) %}
+  {% set last = (data.get("last_trade") or {}) %}
+  {% set profit = (data.get("profit") or {}) %}
+  {% set open_trades = (data.get("open_trades") or []) %}
+  {% set open_count = data.get("open_count") %}
+  {% if open_count is none %}
+    {% set open_count = (open_trades|length) %}
+  {% endif %}
+
+  <div class="grid" style="margin-top:14px">
+
+    <div class="card">
+      <div class="k">Pozíció</div>
+      <div class="v {% if open_count|int > 0 %}ok{% else %}bad{% endif %}">
+        {% if open_count|int > 0 %}VAN POZÍCIÓ{% else %}NINCS POZÍCIÓ{% endif %}
+      </div>
+      <div class="muted">Nyitott trade-ek: <b>{{ open_count }}</b></div>
+    </div>
+
+    <div class="card">
+      <div class="k">Eredmény (összesített)</div>
+      {% if profit %}
+        <div class="row">
+          <span class="pill">Zárt profit %: <b>{{ profit.get("profit_closed_percent_sum", "—") }}</b></span>
+          <span class="pill">Zárt profit (coin): <b>{{ profit.get("profit_closed_coin", "—") }}</b></span>
+          <span class="pill">Trade-ek: <b>{{ profit.get("trade_count", "—") }}</b></span>
+          <span class="pill">Nyertes: <b>{{ profit.get("winning_trades", "—") }}</b></span>
+          <span class="pill">Vesztes: <b>{{ profit.get("losing_trades", "—") }}</b></span>
+        </div>
+      {% else %}
+        <div class="v bad">Nincs profit adat</div>
+      {% endif %}
+      {% if err.get("profit") %}
+        <div class="muted bad" style="margin-top:8px">Hiba (profit): {{ err.get("profit") }}</div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <div class="k">Utolsó trade</div>
+      {% if last %}
+        <div class="row">
+          <span class="pill">Pár: <b>{{ last.get("pair","—") }}</b></span>
+          <span class="pill">Oldal: <b>
+            {% if last.get("ft_order_side") == "buy" %}VÉTEL{% elif last.get("ft_order_side") == "sell" %}ELADÁS{% else %}{{ last.get("ft_order_side","—") }}{% endif %}
+          </b></span>
+          <span class="pill">Ár: <b>{{ last.get("price","—") }}</b></span>
+          <span class="pill">Mennyiség: <b>{{ last.get("amount","—") }}</b></span>
+          <span class="pill">Státusz: <b>{{ last.get("status","—") }}</b></span>
+        </div>
+        <div class="muted" style="margin-top:8px">
+          Nyitás: <b>{{ last.get("open_date","—") }}</b> &nbsp;|&nbsp;
+          Zárás: <b>{{ last.get("close_date","—") }}</b> &nbsp;|&nbsp;
+          Profit %: <b>{{ last.get("profit_pct","—") }}</b>
+        </div>
+      {% else %}
+        <div class="v bad">Nincs utolsó trade adat</div>
+      {% endif %}
+      {% if err.get("last_trade") %}
+        <div class="muted bad" style="margin-top:8px">Hiba (utolsó trade): {{ err.get("last_trade") }}</div>
+      {% endif %}
+    </div>
+
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <div class="k">Nyitott trade-ek (részletek)</div>
+    {% if open_trades and (open_trades|length) > 0 %}
+      <div class="mono">{{ open_trades | tojson(indent=2) }}</div>
+    {% else %}
+      <div class="muted">Nincs nyitott trade.</div>
+    {% endif %}
+    {% if err.get("open_trades") %}
+      <div class="muted bad" style="margin-top:8px">Hiba (open_trades): {{ err.get("open_trades") }}</div>
+    {% endif %}
+  </div>
+
+  <details style="margin-top:14px">
+    <summary class="muted">Technikai részletek (nyers JSON)</summary>
+    <div class="card" style="margin-top:10px">
+      <div class="mono">{{ data | tojson(indent=2) }}</div>
+    </div>
+  </details>
+
+</body>
+</html>

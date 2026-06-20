@@ -1,0 +1,86 @@
+# secrets / live config
+.env
+*.env
+/etc/*
+config/*.env
+freqtrade/user_data/config.json
+freqtrade/user_data/config*.json
+
+# runtime state / logs / reports
+state.json
+state.json.*
+*.csv
+logs/
+reports/
+latest_prices*.csv
+trades.csv
+
+# python
+__pycache__/
+*.pyc
+venv/
+.venv/
+freqtrade/.venv/
+
+# backups / snapshots / archives
+_backup*
+*_backup*
+_snapshots/
+archive/
+*.tgz
+*.tar.gz
+*.zip
+
+# local/temp
+^C
+.DS_Store
+
+# Uranus local audit / old migration artifacts
+*.txt
+*.sha256
+*.flag
+live_snapshot_*.json
+state.canonical_*.json
+_audit/
+_canon/
+_debug_*/
+_meta/
+_statepath_fix_*/
+config/
+
+# backups / temp
+*.BAK*
+*.BROKEN*
+*.OK.*
+BAK_*/
+
+# runtime db
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# logs
+*.log
+*.log.*
+*.nohup
+
+# runtime cache
+app/freqtrade_status.json
+
+# explicit Uranus exclusions
+app/BAK_*/
+app/*.BAK*
+app/templates/*.OK.*
+app/freqtrade_status.json
+
+freqtrade/*.sqlite
+freqtrade/*.sqlite-shm
+freqtrade/*.sqlite-wal
+freqtrade/user_data/*.sqlite
+freqtrade/user_data/*.sqlite-shm
+freqtrade/user_data/*.sqlite-wal
+freqtrade/user_data/*.log
+freqtrade/user_data/*.log.*
+freqtrade/user_data/*.nohup
+freqtrade/user_data/config.json*
+freqtrade/user_data/strategies/*.BROKEN*

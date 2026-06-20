@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8">
+  <title>Uranus – Freqtrade</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;margin:20px;}
+    .box{border:1px solid #ccc;border-radius:10px;padding:16px;max-width:900px;}
+    .row{display:flex;gap:16px;flex-wrap:wrap;}
+    .tile{border:1px solid #ddd;border-radius:10px;padding:12px;min-width:240px;flex:1}
+    .muted{color:#666;font-size:14px}
+    .err{color:#b00020}
+    a{color:#0b57d0}
+    code{background:#f5f5f5;padding:2px 6px;border-radius:6px}
+  </style>
+</head>
+<body>
+  <h1>Freqtrade</h1>
+  <p class="muted">Külön oldal a Freqtrade API státusz/profit adatokhoz.</p>
+  <p><a href="/">← Vissza a főoldalra</a></p>
+
+  <div class="box">
+    {% if not ft %}
+      <p class="err">Nincs adat.</p>
+    {% else %}
+      {% if ft.ok is defined and ft.ok == False %}
+        <p class="err"><b>Hiba:</b> {{ ft.error }}</p>
+      {% endif %}
+
+      <div class="row">
+        <div class="tile">
+          <div class="muted">API Ping</div>
+          <div><b>{{ ft.ping if ft.ping is defined else '-' }}</b></div>
+        </div>
+        <div class="tile">
+          <div class="muted">Státusz</div>
+          <div><b>{{ ft.status if ft.status is defined else '-' }}</b></div>
+        </div>
+        <div class="tile">
+          <div class="muted">Profit</div>
+          <div><b>{{ ft.profit if ft.profit is defined else '-' }}</b></div>
+        </div>
+      </div>
+
+      <p class="muted" style="margin-top:14px;">
+        Debug: <code>{{ ft|tojson }}</code>
+      </p>
+    {% endif %}
+  </div>
+</body>
+</html>
