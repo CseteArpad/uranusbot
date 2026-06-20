@@ -58,6 +58,8 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    help="Slippage per side, fraction (default 0.0)")
     p.add_argument("--verbose",   action="store_true",
                    help="Print each trade as it executes")
+    p.add_argument("--smoke",     action="store_true",
+                   help="Run smoke test only and exit")
     return p.parse_args(argv)
 
 
@@ -253,7 +255,8 @@ def run(
     entry_price = 0.0
     entry_usdc  = 0.0
     entry_ts    = ""
-    prev_cpagg: Optional[float] = None
+    prev_cpagg:     Optional[float] = None
+    entry_snapshot: dict           = {}
 
     # Counters
     trades:       List[dict] = []
@@ -305,26 +308,29 @@ def run(
         # Execute
         if dec.action == cde.ACTION_BUY and pos_state == cde.POSITION_FLAT:
             xrp_in, spent, fee_usdc = _buy_cost(usdc_equity, close, fee_rate, slippage)
-            total_fees  += fee_usdc
-            entry_price  = close
-            entry_usdc   = usdc_equity
-            entry_ts     = ts_utc
-            xrp_held     = xrp_in
-            usdc_equity  = 0.0
-            pos_state    = cde.POSITION_IN_POSITION
-            action_counts["BUY"]  += 1
+            total_fees   += fee_usdc
+            entry_price   = close
+            entry_usdc    = usdc_equity
+            entry_ts      = ts_utc
+            xrp_held      = xrp_in
+            usdc_equity   = 0.0
+            pos_state     = cde.POSITION_IN_POSITION
+            entry_snapshot = _snapshot(ts_utc, close, agg, tscore, trend, dec, raw_cp, eff_cp)
+            action_counts["BUY"]    += 1
             action_counts[dec.rule] += 1
             if verbose:
                 print(f"  BUY  @ {close:.6f}  xrp={xrp_in:.6f}  fee={fee_usdc:.6f}  ts={ts_utc}")
 
         elif dec.action == cde.ACTION_SELL and pos_state == cde.POSITION_IN_POSITION:
             usdc_out, gross, fee_usdc = _sell_proceeds(xrp_held, close, fee_rate, slippage)
-            total_fees  += fee_usdc
-            net_pnl_usdc = usdc_out - entry_usdc
-            pnl_pct      = net_pnl_usdc / entry_usdc * 100.0
-            hold_secs    = (ts_ms - _ts_to_ms(entry_ts)) / 1000.0
+            total_fees   += fee_usdc
+            net_pnl_usdc  = usdc_out - entry_usdc
+            pnl_pct       = net_pnl_usdc / entry_usdc * 100.0
+            hold_secs     = (ts_ms - _ts_to_ms(entry_ts)) / 1000.0
+            exit_snapshot = _snapshot(ts_utc, close, agg, tscore, trend, dec, raw_cp, eff_cp)
             trades.append({
                 "trade_num":    len(trades) + 1,
+                # core accounting
                 "entry_ts":     entry_ts,
                 "exit_ts":      ts_utc,
                 "entry_price":  entry_price,
@@ -334,13 +340,33 @@ def run(
                 "net_pnl_usdc": net_pnl_usdc,
                 "pnl_pct":      pnl_pct,
                 "hold_secs":    hold_secs,
-                "rule":         dec.rule,
                 "fee_usdc":     fee_usdc,
+                # split rule fields
+                "entry_rule":   entry_snapshot["decision_rule"],
+                "exit_rule":    exit_snapshot["decision_rule"],
+                # flat audit fields for convenience
+                "entry_cpagg":            entry_snapshot["cpagg"],
+                "exit_cpagg":             exit_snapshot["cpagg"],
+                "entry_trend_score":      entry_snapshot["trend_score"],
+                "exit_trend_score":       exit_snapshot["trend_score"],
+                "entry_trend_state":      entry_snapshot["trend_state"],
+                "exit_trend_state":       exit_snapshot["trend_state"],
+                "entry_decision_action":  entry_snapshot["decision_action"],
+                "exit_decision_action":   exit_snapshot["decision_action"],
+                "entry_decision_rule":    entry_snapshot["decision_rule"],
+                "exit_decision_rule":     exit_snapshot["decision_rule"],
+                "entry_decision_reason":  entry_snapshot["decision_reason"],
+                "exit_decision_reason":   exit_snapshot["decision_reason"],
+                # full CP dicts
+                "entry_raw_cp_by_tf":      entry_snapshot["raw_cp_by_tf"],
+                "exit_raw_cp_by_tf":       exit_snapshot["raw_cp_by_tf"],
+                "entry_effective_cp_by_tf": entry_snapshot["effective_cp_by_tf"],
+                "exit_effective_cp_by_tf":  exit_snapshot["effective_cp_by_tf"],
             })
             usdc_equity = usdc_out
             xrp_held    = 0.0
             pos_state   = cde.POSITION_FLAT
-            action_counts["SELL"]  += 1
+            action_counts["SELL"]   += 1
             action_counts[dec.rule] += 1
             if verbose:
                 print(
@@ -500,8 +526,47 @@ def _fmt_duration(secs: float) -> str:
     return f"{h:02d}h {m:02d}m {s:02d}s"
 
 
+def _snapshot(
+    ts_utc: str,
+    price: float,
+    agg: Optional[float],
+    tscore: Optional[float],
+    trend: str,
+    dec,
+    raw_cp: Dict[str, Optional[float]],
+    eff_cp: Dict[str, Optional[float]],
+) -> dict:
+    """Capture a complete tick context for entry/exit audit."""
+    return {
+        "ts":              ts_utc,
+        "price":           price,
+        "cpagg":           _r(agg),
+        "trend_score":     _r(tscore),
+        "trend_state":     trend,
+        "decision_action": dec.action,
+        "decision_rule":   dec.rule,
+        "decision_reason": dec.reason,
+        "raw_cp_by_tf": {
+            tf: _r(raw_cp.get(tf)) for tf in ("1H", "4H", "12H", "1D")
+        },
+        "effective_cp_by_tf": {
+            tf: _r(eff_cp.get(tf)) for tf in ("1H", "4H", "12H", "1D")
+        },
+    }
+
+
 def _round_trade(t: dict) -> dict:
-    return {k: (round(v, 6) if isinstance(v, float) else v) for k, v in t.items()}
+    """Round floats in a trade dict; leave nested dicts intact."""
+    out = {}
+    for k, v in t.items():
+        if isinstance(v, float):
+            out[k] = round(v, 6)
+        elif isinstance(v, dict):
+            out[k] = {ik: (round(iv, 6) if isinstance(iv, float) else iv)
+                      for ik, iv in v.items()}
+        else:
+            out[k] = v
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -586,24 +651,34 @@ def _write_txt(path: str, result: dict) -> None:
         "",
     ]
 
-    def _trade_line(t: dict) -> str:
-        return (
-            f"  #{t['trade_num']:>3d}  {t['entry_ts']}→{t['exit_ts']}"
-            f"  {t['entry_price']:.5f}→{t['exit_price']:.5f}"
-            f"  pnl={t['net_pnl_usdc']:+.5f} ({t['pnl_pct']:+.2f}%)"
-            f"  {t['rule']}"
-        )
+    def _trade_block(t: dict) -> List[str]:
+        hold = _fmt_duration(t.get("hold_secs", 0))
+        return [
+            f"  #{t['trade_num']:>3d}  entry={t['entry_ts']}  exit={t['exit_ts']}",
+            f"       price  : {t['entry_price']:.6f} → {t['exit_price']:.6f}",
+            f"       pnl    : {t['net_pnl_usdc']:+.6f} USDC  ({t['pnl_pct']:+.2f}%)  hold={hold}",
+            f"       CPagg  : {t.get('entry_cpagg')} → {t.get('exit_cpagg')}",
+            f"       trend  : {t.get('entry_trend_state')} (score={t.get('entry_trend_score')})"
+            f" → {t.get('exit_trend_state')} (score={t.get('exit_trend_score')})",
+            f"       rule   : {t.get('entry_rule')} → {t.get('exit_rule')}",
+            f"       reason : {t.get('entry_decision_reason')}",
+            f"             → {t.get('exit_decision_reason')}",
+        ]
 
     first20 = result.get("trades_first_20", [])
     last20  = result.get("trades_last_20",  [])
 
     if first20:
         lines += ["-" * W, "  First 20 trades", "-" * W]
-        lines += [_trade_line(t) for t in first20]
+        for t in first20:
+            lines += _trade_block(t)
+            lines.append("")
 
     if last20:
-        lines += ["", "-" * W, "  Last 20 trades", "-" * W]
-        lines += [_trade_line(t) for t in last20]
+        lines += ["-" * W, "  Last 20 trades", "-" * W]
+        for t in last20:
+            lines += _trade_block(t)
+            lines.append("")
 
     lines += ["", "=" * W]
 
@@ -620,6 +695,9 @@ def main(argv=None) -> None:
 
     print("Running smoke test ...")
     _smoke_test()
+    if args.smoke:
+        print("Smoke-only mode — done.")
+        return
 
     tf_config = [dict(tfc) for tfc in DEFAULT_TF_CONFIG]
 
