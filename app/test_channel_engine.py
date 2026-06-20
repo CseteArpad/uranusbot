@@ -254,5 +254,83 @@ class TestEvaluateChannelAt(unittest.TestCase):
             self.assertGreater(up, lo, msg=f"upper <= lower at index {i}")
 
 
+# ---------------------------------------------------------------------------
+# Per-timeframe pivot strength (FÁZIS 1B)
+# ---------------------------------------------------------------------------
+
+class TestPivotStrengthVariants(unittest.TestCase):
+    """
+    Verify that lower pivot strength (left=2, right=2) finds channels where
+    stricter strength (left=3, right=3) fails due to insufficient pivot lows.
+
+    Strategy: plant pivot low candidates whose 3rd-left neighbour is a TIE
+    (equal value).  Strict inequality at left=3 rejects them; left=2 accepts
+    them because it only checks the 2 nearest left neighbours.
+    """
+
+    @staticmethod
+    def _make_blocked_data():
+        """
+        Return (highs, lows) where:
+        - lows[8] and lows[18] are pivot lows with left=2 / right=2.
+        - lows[5] and lows[15] tie with the pivot value, so left=3 is blocked.
+        - highs[13] is a clear pivot high reachable by both pivot strengths.
+        """
+        n = 25
+        lows  = [1.0] * n
+        highs = [1.5] * n
+
+        lows[5]  = 0.7   # tie at distance 3 from idx 8 — blocks left=3
+        lows[8]  = 0.7   # candidate pivot 1: lows[6,7]=1.0 > 0.7 ✓ with left=2
+        lows[15] = 0.7   # tie at distance 3 from idx 18 — blocks left=3
+        lows[18] = 0.7   # candidate pivot 2: lows[16,17]=1.0 > 0.7 ✓ with left=2
+        highs[13] = 2.0  # pivot high above the lower line
+
+        return highs, lows
+
+    def test_left2_succeeds_where_left3_fails(self):
+        highs, lows = self._make_blocked_data()
+
+        # left=3, right=3: lows[5]=0.7 is NOT strictly greater than lows[8]=0.7
+        # so index 8 is not a pivot, and index 18 is not a pivot → insufficient
+        ch3 = ce.build_parallel_channel(highs, lows, left=3, right=3)
+        self.assertFalse(ch3["valid"])
+        self.assertEqual(ch3["reason"], ce.REASON_INSUFFICIENT_PIVOT_LOWS)
+
+        # left=2, right=2: only checks lows[6,7] on the left side for index 8
+        # Both are 1.0 > 0.7 ✓.  Two pivot lows found → valid channel.
+        ch2 = ce.build_parallel_channel(highs, lows, left=2, right=2)
+        self.assertTrue(ch2["valid"], msg=ch2.get("reason"))
+        self.assertGreaterEqual(ch2["pivot_low_count"],  2)
+        self.assertGreaterEqual(ch2["pivot_high_count"], 1)
+
+    def test_pivot_counts_differ_by_strength(self):
+        # With a clean dataset both strengths find pivots,
+        # but left=2 may find MORE (wider detection window).
+        highs, lows = _make_candles(
+            n=40,
+            pl_idxs=[8, 22], pl_vals=[0.60, 0.70],
+            ph_idxs=[15],    ph_vals=[1.90],
+        )
+        ch2 = ce.build_parallel_channel(highs, lows, left=2, right=2)
+        ch3 = ce.build_parallel_channel(highs, lows, left=3, right=3)
+        # Both should produce valid channels on clean data
+        self.assertTrue(ch2["valid"], msg=ch2.get("reason"))
+        self.assertTrue(ch3["valid"], msg=ch3.get("reason"))
+        # left=2 finds at least as many pivots as left=3
+        self.assertGreaterEqual(ch2["pivot_low_count"], ch3["pivot_low_count"])
+
+    def test_channel_engine_accepts_any_left_right(self):
+        """channel_engine.build_parallel_channel accepts any positive left/right."""
+        highs, lows = _make_candles(
+            n=40,
+            pl_idxs=[8, 22], pl_vals=[0.60, 0.70],
+            ph_idxs=[15],    ph_vals=[1.90],
+        )
+        for left, right in [(1, 1), (2, 2), (3, 3), (2, 3), (3, 2)]:
+            ch = ce.build_parallel_channel(highs, lows, left=left, right=right)
+            self.assertIn("valid", ch, msg=f"no 'valid' key with left={left} right={right}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

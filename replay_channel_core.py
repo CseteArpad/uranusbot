@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-# replay_channel_core.py — FÁZIS 1: multi-timeframe pivot channel engine replay
-# Reads historical XRP/USDC 1m candles, computes parallel channels per timeframe,
-# aggregates CP, derives trend state and candidate action.  No real orders.
+# replay_channel_core.py — FÁZIS 1B: multi-timeframe pivot channel engine replay
+# Per-timeframe pivot strength, CLI --days / --pivot-* overrides.  No real orders.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -14,7 +14,6 @@ from typing import Dict, List, Optional, Tuple
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-# Allow "import channel_engine" when run from the repo root
 sys.path.insert(0, str(Path(__file__).parent / "app"))
 import channel_engine as ce
 
@@ -25,42 +24,74 @@ import channel_engine as ce
 CANDLE_PATH = r"/opt/bots/uranus/freqtrade/user_data/data/binance/XRP_USDC-1m.json"
 REPORTS_DIR = "reports"
 
-REPLAY_DAYS = 30
+DEFAULT_REPLAY_DAYS = 30
 
-# (name, minutes_per_bar, lookback_bars_of_completed_tf_bars)
-TIMEFRAMES: List[Tuple[str, int, int]] = [
-    ("1H",   60,   50),
-    ("4H",   240,  30),
-    ("12H",  720,  20),
-    ("1D",   1440, 14),
+# Per-timeframe defaults: higher TFs use smaller pivot windows (fewer bars
+# available, so strict left=3/right=3 produces too few pivots on 12H / 1D).
+DEFAULT_TF_CONFIG: List[dict] = [
+    {"name": "1H",  "minutes": 60,   "lookback": 50, "pivot_left": 3, "pivot_right": 3},
+    {"name": "4H",  "minutes": 240,  "lookback": 30, "pivot_left": 3, "pivot_right": 3},
+    {"name": "12H", "minutes": 720,  "lookback": 20, "pivot_left": 2, "pivot_right": 2},
+    {"name": "1D",  "minutes": 1440, "lookback": 14, "pivot_left": 2, "pivot_right": 2},
 ]
 
 WEIGHTS: Dict[str, float] = {"1H": 0.10, "4H": 0.20, "12H": 0.30, "1D": 0.40}
-
-PIVOT_LEFT  = 3
-PIVOT_RIGHT = 3
 
 BUY_ZONE_THRESHOLD  = 0.20
 SELL_ZONE_THRESHOLD = 0.80
 
 
 # ---------------------------------------------------------------------------
-# Candle loading
+# CLI
+# ---------------------------------------------------------------------------
+
+def _parse_args(argv=None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Uranus Channel Core — historical pivot channel replay"
+    )
+    p.add_argument("--days",       type=int,   default=DEFAULT_REPLAY_DAYS,
+                   help="Replay window in days (default: 30)")
+    p.add_argument("--pivot-1h",   type=int,   default=None, dest="pivot_1h",
+                   metavar="N", help="Pivot left=right for 1H (default: 3)")
+    p.add_argument("--pivot-4h",   type=int,   default=None, dest="pivot_4h",
+                   metavar="N", help="Pivot left=right for 4H (default: 3)")
+    p.add_argument("--pivot-12h",  type=int,   default=None, dest="pivot_12h",
+                   metavar="N", help="Pivot left=right for 12H (default: 2)")
+    p.add_argument("--pivot-1d",   type=int,   default=None, dest="pivot_1d",
+                   metavar="N", help="Pivot left=right for 1D (default: 2)")
+    return p.parse_args(argv)
+
+
+def _apply_overrides(tf_config: List[dict], args: argparse.Namespace) -> List[dict]:
+    """Return a new list with per-TF pivot overrides applied (if provided)."""
+    override_map = {
+        "1H":  args.pivot_1h,
+        "4H":  args.pivot_4h,
+        "12H": args.pivot_12h,
+        "1D":  args.pivot_1d,
+    }
+    result = []
+    for tfc in tf_config:
+        cfg = dict(tfc)
+        ov = override_map.get(cfg["name"])
+        if ov is not None:
+            cfg["pivot_left"]  = ov
+            cfg["pivot_right"] = ov
+        result.append(cfg)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Candle loading & resampling
 # ---------------------------------------------------------------------------
 
 def _load_candles(path: str) -> List:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    # Format: [[ts_ms, open, high, low, close, volume], ...]
     return sorted(data, key=lambda c: c[0])
 
 
-# ---------------------------------------------------------------------------
-# Resampling
-# ---------------------------------------------------------------------------
-
 def _resample(candles_1m: List, tf_minutes: int) -> List[dict]:
-    """Aggregate 1m candles into tf-minute OHLCV bars."""
     ms_per_bar = tf_minutes * 60 * 1000
     buckets: Dict[int, dict] = {}
     for c in candles_1m:
@@ -86,7 +117,7 @@ def _resample(candles_1m: List, tf_minutes: int) -> List[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Channel cache: precompute channel for every TF bar, collect stats
+# Channel cache with per-TF pivot params
 # ---------------------------------------------------------------------------
 
 def _empty_reason_counts() -> Dict[str, int]:
@@ -96,21 +127,16 @@ def _empty_reason_counts() -> Dict[str, int]:
 def _build_channel_cache(
     tf_bars: List[dict],
     lookback: int,
+    pivot_left: int,
+    pivot_right: int,
 ) -> Tuple[Dict[int, dict], dict]:
     """
-    For bar at index i, build a channel from bars[max(0, i-lookback) : i]
-    (all COMPLETED bars before bar i).  The cache is keyed by bar ts_ms.
-
-    Returns (cache, stats) where stats contains:
-      - total_bars
-      - invalid_reasons: {reason: count}
-      - last_valid_ts_ms / last_valid_ts_utc
-      - last_invalid_reason
-      - last_pivot_low_count / last_pivot_high_count  (from most recent build)
+    Build a channel for each completed TF bar and collect diagnostics.
+    Returns (cache, stats).  cache is keyed by bar ts_ms.
     """
     cache: Dict[int, dict] = {}
-    invalid_reasons = _empty_reason_counts()
-    last_valid_ts_ms: Optional[int]   = None
+    invalid_reasons  = _empty_reason_counts()
+    last_valid_ts_ms: Optional[int]    = None
     last_invalid_reason: Optional[str] = None
     last_pl_count = 0
     last_ph_count = 0
@@ -121,7 +147,7 @@ def _build_channel_cache(
 
         highs = [b["high"] for b in window]
         lows  = [b["low"]  for b in window]
-        ch = ce.build_parallel_channel(highs, lows, PIVOT_LEFT, PIVOT_RIGHT)
+        ch = ce.build_parallel_channel(highs, lows, pivot_left, pivot_right)
 
         cache[bar["ts_ms"]] = ch
 
@@ -132,13 +158,12 @@ def _build_channel_cache(
             last_valid_ts_ms = bar["ts_ms"]
         else:
             reason = ch.get("reason") or ce.REASON_OTHER_EXCEPTION
-            # Guard against unknown reasons not in our list
             if reason not in invalid_reasons:
                 reason = ce.REASON_OTHER_EXCEPTION
             invalid_reasons[reason] += 1
             last_invalid_reason = reason
 
-    stats = {
+    return cache, {
         "total_bars":            len(tf_bars),
         "invalid_reasons":       invalid_reasons,
         "last_valid_ts_ms":      last_valid_ts_ms,
@@ -147,11 +172,10 @@ def _build_channel_cache(
         "last_pivot_low_count":  last_pl_count,
         "last_pivot_high_count": last_ph_count,
     }
-    return cache, stats
 
 
 # ---------------------------------------------------------------------------
-# Per-candle computation
+# Per-candle helpers
 # ---------------------------------------------------------------------------
 
 def _compute_cp(close: float, ch: dict) -> Optional[float]:
@@ -168,7 +192,6 @@ def _compute_cp(close: float, ch: dict) -> Optional[float]:
 
 
 def _cpagg(cp_vals: Dict[str, Optional[float]]) -> Optional[float]:
-    """Weighted average of available (non-None) CPs; renormalize if some TFs missing."""
     wsum = 0.0
     wtot = 0.0
     for tf, cp in cp_vals.items():
@@ -210,7 +233,7 @@ def _r(v: Optional[float], places: int = 4) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
-# Report helpers
+# TXT report
 # ---------------------------------------------------------------------------
 
 def _write_txt(path: str, result: dict) -> None:
@@ -219,63 +242,88 @@ def _write_txt(path: str, result: dict) -> None:
     inv_by = result.get("invalid_reasons_by_timeframe", {})
     dbg_by = result.get("debug_counts_by_timeframe", {})
 
-    tf_names = [tf for tf, _, _ in TIMEFRAMES]
+    tf_names = list(cfg["timeframes"].keys())
 
     def _pct(v):
         return f"{v:.4f}" if v is not None else "N/A"
 
+    def _col4(vals, width=7, fmt="{:>{w}d}"):
+        return "".join(fmt.format(v, w=width) for v in vals)
+
+    def _col4f(vals, width=7, decimals=1):
+        return "".join(f"{v:>{width}.{decimals}f}" for v in vals)
+
+    W = 76
     lines = [
-        "=" * 76,
-        "  Uranus Channel Core — FÁZIS 1 Replay",
-        "=" * 76,
+        "=" * W,
+        "  Uranus Channel Core — FÁZIS 1B Replay",
+        "=" * W,
         "",
         f"  Candle file   : {cfg['candle_path']}",
         f"  Replay window : {cfg['replay_start_utc']}  to  {cfg['replay_end_utc']}",
         f"  Replay days   : {cfg['replay_days']}",
-        f"  Pivot left    : {cfg['pivot_left']}   right : {cfg['pivot_right']}",
         "",
-        "-" * 76,
-        "  Channel validity per timeframe",
-        "-" * 76,
+        "  Timeframe settings:",
     ]
-    for tf, _, _ in TIMEFRAMES:
-        valid   = summ[f"cp_valid_ticks_{tf}"]
-        total   = summ["candles_1m_processed"]
-        pct     = 100.0 * valid / total if total else 0.0
-        ch_fail = sum(inv_by.get(tf, {}).values())
+    for tf in tf_names:
+        tc = cfg["timeframes"][tf]
         lines.append(
-            f"  {tf:>4s}  cp_valid={valid:>6d}/{total}  ({pct:5.1f}%)  "
-            f"build_invalid={ch_fail}"
+            f"    {tf:<5s} minutes={tc['minutes']:<6d} lookback={tc['lookback']:<4d}"
+            f" pivot_left={tc['pivot_left']}  pivot_right={tc['pivot_right']}"
+        )
+
+    # Validity overview
+    lines += ["", "-" * W, "  Channel validity per timeframe", "-" * W]
+    for tf in tf_names:
+        valid = summ[f"cp_valid_ticks_{tf}"]
+        total = summ["candles_1m_processed"]
+        pct   = 100.0 * valid / total if total else 0.0
+        fail  = sum(inv_by.get(tf, {}).values())
+        lines.append(
+            f"  {tf:>4s}  cp_valid={valid:>7d}/{total}  ({pct:5.1f}%)  build_invalid={fail}"
         )
 
     # Invalid reason breakdown table
+    hdr_cols = "".join(f"{tf:>7s}" for tf in tf_names)
+    sep = "  " + "-" * (34 + 7 * len(tf_names))
     lines += [
         "",
-        "-" * 76,
+        "-" * W,
         "  Invalid channel reasons per timeframe",
-        "-" * 76,
-        f"  {'Reason':<34s}{'1H':>7s}{'4H':>7s}{'12H':>7s}{'1D':>7s}",
-        "  " + "-" * 58,
+        "-" * W,
+        f"  {'Reason':<34s}{hdr_cols}",
+        sep,
     ]
     for reason in ce.ALL_INVALID_REASONS:
         counts = [inv_by.get(tf, {}).get(reason, 0) for tf in tf_names]
-        row = f"  {reason:<34s}" + "".join(f"{c:>7d}" for c in counts)
-        lines.append(row)
+        lines.append(f"  {reason:<34s}" + _col4(counts))
 
     # Debug counts table
     lines += [
         "",
-        "-" * 76,
+        "-" * W,
         "  Debug counts per timeframe",
-        "-" * 76,
-        f"  {'Metric':<34s}{'1H':>7s}{'4H':>7s}{'12H':>7s}{'1D':>7s}",
-        "  " + "-" * 58,
+        "-" * W,
+        f"  {'Metric':<34s}{hdr_cols}",
+        sep,
     ]
-    for metric in ("total_bars", "last_pivot_low_count", "last_pivot_high_count"):
-        vals = [dbg_by.get(tf, {}).get(metric, 0) for tf in tf_names]
-        row = f"  {metric:<34s}" + "".join(f"{v:>7d}" for v in vals)
-        lines.append(row)
+    int_metrics = [
+        ("pivot_left",            lambda tf: dbg_by.get(tf, {}).get("pivot_left",            0)),
+        ("pivot_right",           lambda tf: dbg_by.get(tf, {}).get("pivot_right",           0)),
+        ("total_bars",            lambda tf: dbg_by.get(tf, {}).get("total_bars",            0)),
+        ("last_pivot_low_count",  lambda tf: dbg_by.get(tf, {}).get("last_pivot_low_count",  0)),
+        ("last_pivot_high_count", lambda tf: dbg_by.get(tf, {}).get("last_pivot_high_count", 0)),
+        ("cp_valid_ticks",        lambda tf: dbg_by.get(tf, {}).get("cp_valid_ticks",        0)),
+    ]
+    for label, fn in int_metrics:
+        vals = [fn(tf) for tf in tf_names]
+        lines.append(f"  {label:<34s}" + _col4(vals))
 
+    # cp_valid_pct (float row)
+    pct_vals = [dbg_by.get(tf, {}).get("cp_valid_pct", 0.0) for tf in tf_names]
+    lines.append(f"  {'cp_valid_pct':<34s}" + _col4f(pct_vals, decimals=1))
+
+    # Per-TF last ts / reason
     lines += [""]
     for tf in tf_names:
         d = dbg_by.get(tf, {})
@@ -285,9 +333,9 @@ def _write_txt(path: str, result: dict) -> None:
 
     # Last computed values
     lines += [
-        "-" * 76,
+        "-" * W,
         "  Last computed values",
-        "-" * 76,
+        "-" * W,
         f"  CP_1H   = {_pct(summ['last_cp_1h'])}",
         f"  CP_4H   = {_pct(summ['last_cp_4h'])}",
         f"  CP_12H  = {_pct(summ['last_cp_12h'])}",
@@ -298,7 +346,7 @@ def _write_txt(path: str, result: dict) -> None:
         "",
     ]
 
-    # CP row table
+    # CP row tables
     def _row_line(r: dict) -> str:
         def _fv(v):
             return f"{v:+.4f}" if v is not None else "  N/A "
@@ -320,14 +368,14 @@ def _write_txt(path: str, result: dict) -> None:
     last20  = result.get("cp_rows_last_20",  [])
 
     if first20:
-        lines += ["-" * 76, "  First 20 rows", "-" * 76, header]
+        lines += ["-" * W, "  First 20 rows", "-" * W, header]
         lines += [_row_line(r) for r in first20]
 
     if last20:
-        lines += ["", "-" * 76, "  Last 20 rows", "-" * 76, header]
+        lines += ["", "-" * W, "  Last 20 rows", "-" * W, header]
         lines += [_row_line(r) for r in last20]
 
-    lines += ["", "=" * 76]
+    lines += ["", "=" * W]
 
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
@@ -337,43 +385,58 @@ def _write_txt(path: str, result: dict) -> None:
 # Main replay
 # ---------------------------------------------------------------------------
 
-def run() -> dict:
+def run(tf_config: List[dict] = None, replay_days: int = DEFAULT_REPLAY_DAYS) -> dict:
+    """
+    Run the channel core replay.
+
+    Args:
+        tf_config:   list of TF config dicts (name, minutes, lookback,
+                     pivot_left, pivot_right).  Defaults to DEFAULT_TF_CONFIG.
+        replay_days: number of trailing calendar days to replay.
+    """
+    if tf_config is None:
+        tf_config = [dict(tfc) for tfc in DEFAULT_TF_CONFIG]
+
     print(f"Loading candles from {CANDLE_PATH} ...")
     all_candles = _load_candles(CANDLE_PATH)
     print(f"  Total 1m candles in file: {len(all_candles)}")
 
-    # Determine replay window: last REPLAY_DAYS of data
-    replay_ms        = REPLAY_DAYS * 24 * 60 * 60 * 1000
-    last_ts_ms       = int(all_candles[-1][0])
-    replay_start_ms  = last_ts_ms - replay_ms
+    replay_ms_span  = replay_days * 24 * 60 * 60 * 1000
+    last_ts_ms      = int(all_candles[-1][0])
+    replay_start_ms = last_ts_ms - replay_ms_span
 
-    # Warmup: enough history for the longest TF lookback (1D * 14 = 14 days)
-    warmup_ms      = max(tf_min * lb for _, tf_min, lb in TIMEFRAMES) * 60 * 1000
-    data_start_ms  = replay_start_ms - warmup_ms
+    # Warmup: longest lookback in minutes across all TFs
+    warmup_ms = max(tfc["minutes"] * tfc["lookback"] for tfc in tf_config) * 60 * 1000
+    data_start_ms = replay_start_ms - warmup_ms
 
     working = [c for c in all_candles if int(c[0]) >= data_start_ms]
     replay  = [c for c in working    if int(c[0]) >= replay_start_ms]
 
-    print(f"  Working set : {len(working)} candles  (incl. {warmup_ms // 60000 // 60 // 24}d warmup)")
-    print(f"  Replay set  : {len(replay)} candles")
+    warmup_days = warmup_ms // (60 * 60 * 24 * 1000)
+    print(f"  Working set : {len(working)} candles  (incl. {warmup_days}d warmup)")
+    print(f"  Replay set  : {len(replay)} candles  ({replay_days}d)")
 
     # Resample & build channel caches
-    tf_bars:    Dict[str, List[dict]]      = {}
-    ch_caches:  Dict[str, Dict[int, dict]] = {}
-    tf_stats:   Dict[str, dict]            = {}
+    tf_bars:   Dict[str, List[dict]]      = {}
+    ch_caches: Dict[str, Dict[int, dict]] = {}
+    tf_stats:  Dict[str, dict]            = {}
 
-    for tf_name, tf_min, tf_lb in TIMEFRAMES:
-        bars = _resample(working, tf_min)
+    for tfc in tf_config:
+        tf_name = tfc["name"]
+        bars = _resample(working, tfc["minutes"])
         tf_bars[tf_name] = bars
-        print(f"  {tf_name:>4s}: {len(bars)} bars  (lookback={tf_lb})")
-        cache, stats = _build_channel_cache(bars, tf_lb)
+        print(f"  {tf_name:>4s}: {len(bars)} bars  (lookback={tfc['lookback']}  "
+              f"pivot_left={tfc['pivot_left']}  pivot_right={tfc['pivot_right']})")
+        cache, stats = _build_channel_cache(
+            bars, tfc["lookback"], tfc["pivot_left"], tfc["pivot_right"]
+        )
         ch_caches[tf_name] = cache
         tf_stats[tf_name]  = stats
 
-    bar_ms: Dict[str, int] = {tf: tf_min * 60 * 1000 for tf, tf_min, _ in TIMEFRAMES}
+    bar_ms: Dict[str, int] = {tfc["name"]: tfc["minutes"] * 60 * 1000 for tfc in tf_config}
 
-    # Replay tracking
-    cp_valid_ticks: Dict[str, int] = {tf: 0 for tf, _, _ in TIMEFRAMES}
+    # Replay
+    cp_valid_ticks: Dict[str, int] = {tfc["name"]: 0 for tfc in tf_config}
     rows:   List[dict] = []
     last_row: Optional[dict] = None
 
@@ -383,11 +446,12 @@ def run() -> dict:
         close = float(candle[4])
 
         cp_vals: Dict[str, Optional[float]] = {}
-        for tf_name, _, _ in TIMEFRAMES:
-            bms    = bar_ms[tf_name]
-            bar_ts = (ts_ms // bms) * bms
-            ch     = ch_caches[tf_name].get(bar_ts)
-            cp     = _compute_cp(close, ch)
+        for tfc in tf_config:
+            tf_name = tfc["name"]
+            bms     = bar_ms[tf_name]
+            bar_ts  = (ts_ms // bms) * bms
+            ch      = ch_caches[tf_name].get(bar_ts)
+            cp      = _compute_cp(close, ch)
             cp_vals[tf_name] = cp
             if cp is not None:
                 cp_valid_ticks[tf_name] += 1
@@ -415,25 +479,50 @@ def run() -> dict:
 
     print(f"  Replay complete. {len(rows)} rows.")
 
-    # Assemble result
+    n_rows = len(rows)
+
+    # debug_counts per TF
+    debug_by: Dict[str, dict] = {}
+    for tfc in tf_config:
+        tf_name = tfc["name"]
+        st = tf_stats[tf_name]
+        vt = cp_valid_ticks[tf_name]
+        debug_by[tf_name] = {
+            "pivot_left":            tfc["pivot_left"],
+            "pivot_right":           tfc["pivot_right"],
+            "total_bars":            st["total_bars"],
+            "last_pivot_low_count":  st["last_pivot_low_count"],
+            "last_pivot_high_count": st["last_pivot_high_count"],
+            "cp_valid_ticks":        vt,
+            "cp_valid_pct":          round(100.0 * vt / n_rows, 2) if n_rows else 0.0,
+            "last_valid_ts_utc":     st["last_valid_ts_utc"],
+            "last_invalid_reason":   st["last_invalid_reason"],
+        }
+
     result = {
         "config": {
             "candle_path":         CANDLE_PATH,
-            "replay_days":         REPLAY_DAYS,
+            "replay_days":         replay_days,
             "replay_start_utc":    _fmt_ts(replay_start_ms),
             "replay_end_utc":      _fmt_ts(last_ts_ms),
-            "pivot_left":          PIVOT_LEFT,
-            "pivot_right":         PIVOT_RIGHT,
             "weights":             WEIGHTS,
-            "timeframes":          {tf: {"minutes": m, "lookback": lb} for tf, m, lb in TIMEFRAMES},
+            "timeframes": {
+                tfc["name"]: {
+                    "minutes":     tfc["minutes"],
+                    "lookback":    tfc["lookback"],
+                    "pivot_left":  tfc["pivot_left"],
+                    "pivot_right": tfc["pivot_right"],
+                }
+                for tfc in tf_config
+            },
             "buy_zone_threshold":  BUY_ZONE_THRESHOLD,
             "sell_zone_threshold": SELL_ZONE_THRESHOLD,
         },
         "summary": {
-            "candles_1m_processed": len(rows),
-            **{f"cp_valid_ticks_{tf}":       cp_valid_ticks[tf] for tf, _, _ in TIMEFRAMES},
-            **{f"channel_build_invalid_{tf}": sum(tf_stats[tf]["invalid_reasons"].values())
-               for tf, _, _ in TIMEFRAMES},
+            "candles_1m_processed": n_rows,
+            **{f"cp_valid_ticks_{tfc['name']}": cp_valid_ticks[tfc["name"]] for tfc in tf_config},
+            **{f"channel_build_invalid_{tfc['name']}":
+               sum(tf_stats[tfc["name"]]["invalid_reasons"].values()) for tfc in tf_config},
             "last_cp_1h":            last_row["cp_1h"]            if last_row else None,
             "last_cp_4h":            last_row["cp_4h"]            if last_row else None,
             "last_cp_12h":           last_row["cp_12h"]           if last_row else None,
@@ -443,18 +532,9 @@ def run() -> dict:
             "last_candidate_action": last_row["candidate_action"] if last_row else None,
         },
         "invalid_reasons_by_timeframe": {
-            tf: dict(tf_stats[tf]["invalid_reasons"]) for tf, _, _ in TIMEFRAMES
+            tfc["name"]: dict(tf_stats[tfc["name"]]["invalid_reasons"]) for tfc in tf_config
         },
-        "debug_counts_by_timeframe": {
-            tf: {
-                "total_bars":            tf_stats[tf]["total_bars"],
-                "last_pivot_low_count":  tf_stats[tf]["last_pivot_low_count"],
-                "last_pivot_high_count": tf_stats[tf]["last_pivot_high_count"],
-                "last_valid_ts_utc":     tf_stats[tf]["last_valid_ts_utc"],
-                "last_invalid_reason":   tf_stats[tf]["last_invalid_reason"],
-            }
-            for tf, _, _ in TIMEFRAMES
-        },
+        "debug_counts_by_timeframe": debug_by,
         "cp_rows_first_20": rows[:20],
         "cp_rows_last_20":  rows[-20:],
     }
@@ -462,12 +542,15 @@ def run() -> dict:
     return result
 
 
-def main() -> None:
+def main(argv=None) -> None:
+    args      = _parse_args(argv)
+    tf_config = _apply_overrides([dict(tfc) for tfc in DEFAULT_TF_CONFIG], args)
+
     os.makedirs(REPORTS_DIR, exist_ok=True)
     json_path = os.path.join(REPORTS_DIR, "channel_core_xrp_30d.json")
     txt_path  = os.path.join(REPORTS_DIR, "channel_core_xrp_30d.txt")
 
-    result = run()
+    result = run(tf_config=tf_config, replay_days=args.days)
 
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)
@@ -478,28 +561,36 @@ def main() -> None:
 
     # Console summary
     s      = result["summary"]
-    inv_by = result["invalid_reasons_by_timeframe"]
     dbg_by = result["debug_counts_by_timeframe"]
+    inv_by = result["invalid_reasons_by_timeframe"]
 
     print("\n" + "=" * 64)
-    print("  Channel Core — Final Summary")
+    print("  Channel Core — Summary")
     print("=" * 64)
-    for tf, _, _ in TIMEFRAMES:
-        valid = s[f"cp_valid_ticks_{tf}"]
-        total = s["candles_1m_processed"]
-        pct   = 100.0 * valid / total if total else 0.0
-        print(f"  {tf:>4s}  valid_ticks={valid}/{total}  ({pct:.1f}%)")
+    for tfc in tf_config:
+        tf = tfc["name"]
+        d  = dbg_by[tf]
+        print(
+            f"  {tf:>4s}  cp_valid={d['cp_valid_pct']:5.1f}%  "
+            f"pivot={tfc['pivot_left']}/{tfc['pivot_right']}  "
+            f"bars={d['total_bars']:<5d}  "
+            f"pl={d['last_pivot_low_count']}  ph={d['last_pivot_high_count']}"
+        )
 
     print(f"\n  Last CPagg  = {s['last_cpagg']}")
     print(f"  Last Trend  = {s['last_trend_state']}")
     print(f"  Last Action = {s['last_candidate_action']}")
 
-    print("\n  Invalid reasons:")
-    for reason in ce.ALL_INVALID_REASONS:
-        counts = [inv_by.get(tf, {}).get(reason, 0) for tf, _, _ in TIMEFRAMES]
-        if any(c > 0 for c in counts):
-            tf_str = "  ".join(f"{tf}={c}" for (tf, _, _), c in zip(TIMEFRAMES, counts) if c > 0)
-            print(f"    {reason:<34s} {tf_str}")
+    non_zero = {
+        reason: {tf: inv_by[tf].get(reason, 0) for tf in dbg_by}
+        for reason in ce.ALL_INVALID_REASONS
+        if any(inv_by[tf].get(reason, 0) > 0 for tf in dbg_by)
+    }
+    if non_zero:
+        print("\n  Invalid reasons (non-zero):")
+        for reason, counts in non_zero.items():
+            parts = "  ".join(f"{tf}={c}" for tf, c in counts.items() if c > 0)
+            print(f"    {reason:<34s} {parts}")
 
     print("=" * 64)
 
