@@ -5,12 +5,13 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Deque, Dict, List, Optional, Tuple
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
@@ -60,6 +61,11 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    help="Print each trade as it executes")
     p.add_argument("--smoke",     action="store_true",
                    help="Run smoke test only and exit")
+    p.add_argument("--audit-trade", type=int, default=None, dest="audit_trade",
+                   metavar="N", help="Emit tick-level audit for trade #N")
+    p.add_argument("--audit-window-minutes", type=int, default=10,
+                   dest="audit_window_minutes",
+                   metavar="W", help="±W minutes around entry_ts for audit (default 10)")
     return p.parse_args(argv)
 
 
@@ -256,6 +262,8 @@ def run(
     fee_rate: float,
     slippage: float,
     verbose: bool,
+    audit_trade: Optional[int] = None,
+    audit_window_minutes: int  = 10,
 ) -> dict:
 
     print(f"Loading candles from {CANDLE_PATH} ...")
@@ -296,6 +304,13 @@ def run(
     entry_ts    = ""
     prev_cpagg:     Optional[float] = None
     entry_snapshot: dict           = {}
+
+    # Audit state (single-pass rolling deque approach)
+    audit_window_ms   = audit_window_minutes * 60 * 1000
+    audit_pre_buf:    Deque[dict]  = collections.deque(maxlen=audit_window_minutes)
+    audit_rows:       List[dict]   = []   # final collected rows
+    audit_collecting  = False             # True once target BUY fires
+    audit_end_ms:     int          = 0    # stop collecting after this ts
 
     # Counters
     trades:       List[dict] = []
@@ -453,6 +468,40 @@ def run(
 
         prev_cpagg = agg
 
+        # Audit tick collection (only when --audit-trade is set)
+        if audit_trade is not None:
+            audit_row = {
+                "ts":               ts_utc,
+                "price":            close,
+                "raw_cp_by_tf":     {tf: _r(raw_cp.get(tf)) for tf in ("1H", "4H", "12H", "1D")},
+                "effective_cp_by_tf": {tf: _r(eff_cp.get(tf)) for tf in ("1H", "4H", "12H", "1D")},
+                "channel_bounds_by_tf": bounds,
+                "cpagg":            _r(agg),
+                "trend_score":      _r(tscore),
+                "trend_state":      trend,
+                "position_state":   pos_state,
+                "decision_action":  dec.action,
+                "decision_rule":    dec.rule,
+                "decision_reason":  dec.reason,
+            }
+
+            if audit_collecting:
+                audit_rows.append(audit_row)
+                if ts_ms >= audit_end_ms:
+                    audit_collecting = False     # window closed; stop collecting
+            else:
+                # This BUY just fired and is trade number audit_trade?
+                # Check: action_counts["BUY"] was just incremented for this tick's BUY.
+                if (dec.action == cde.ACTION_BUY
+                        and action_counts["BUY"] == audit_trade):
+                    # Flush pre-buffer (pre-entry side) then start collecting
+                    audit_rows = list(audit_pre_buf)
+                    audit_rows.append(audit_row)
+                    audit_collecting = True
+                    audit_end_ms     = ts_ms + audit_window_ms
+                else:
+                    audit_pre_buf.append(audit_row)
+
         # Save last tick for report
         last_tick = {
             "ts_utc":      ts_utc,
@@ -562,6 +611,9 @@ def run(
         "last_tick": last_tick,
         "trades_first_20": [_round_trade(t) for t in closed[:20]],
         "trades_last_20":  [_round_trade(t) for t in closed[-20:]],
+        "audit_rows":      audit_rows,
+        "audit_trade_num": audit_trade,
+        "audit_window_minutes": audit_window_minutes,
     }
     return result
 
@@ -642,6 +694,96 @@ def _round_trade(t: dict) -> dict:
         else:
             out[k] = v
     return out
+
+
+# ---------------------------------------------------------------------------
+# Audit report helpers
+# ---------------------------------------------------------------------------
+
+_AUDIT_TFS = ("1H", "4H", "12H", "1D")
+
+
+def _audit_bound(bounds_by_tf: Optional[dict], tf: str, field: str) -> str:
+    """Extract one field from channel_bounds_by_tf for a given TF, or 'N/A'."""
+    if not bounds_by_tf:
+        return "N/A"
+    b = bounds_by_tf.get(tf)
+    if not b:
+        return "N/A"
+    v = b.get(field)
+    return f"{v:.6f}" if v is not None else "N/A"
+
+
+def _write_audit_json(path: str, result: dict, trade: dict) -> None:
+    payload = {
+        "trade":              trade,
+        "audit_window_minutes": result["audit_window_minutes"],
+        "rows":               result["audit_rows"],
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+
+
+def _write_audit_txt(path: str, result: dict, trade: dict) -> None:
+    rows  = result["audit_rows"]
+    aw    = result["audit_window_minutes"]
+    tnum  = result["audit_trade_num"]
+    W     = 140
+
+    lines = [
+        "=" * W,
+        f"  Uranus Channel Decision — Tick-level Audit  |  Trade #{tnum}  |  ±{aw} min",
+        "=" * W,
+        f"  entry_ts    : {trade.get('entry_ts')}",
+        f"  exit_ts     : {trade.get('exit_ts')}",
+        f"  entry_price : {trade.get('entry_price')}",
+        f"  exit_price  : {trade.get('exit_price')}",
+        f"  pnl         : {trade.get('net_pnl_usdc'):+.6f} USDC  ({trade.get('pnl_pct'):+.2f}%)",
+        f"  entry_rule  : {trade.get('entry_rule')}",
+        f"  exit_rule   : {trade.get('exit_rule')}",
+        "",
+        f"  Audit rows  : {len(rows)}",
+        "",
+    ]
+
+    # Header row
+    hdr = (
+        f"  {'ts':20s}  {'price':>10s}"
+        f"  {'1H_lo':>10s}  {'1H_up':>10s}  {'1H_cp':>7s}"
+        f"  {'4H_lo':>10s}  {'4H_up':>10s}  {'4H_cp':>7s}"
+        f"  {'12H_lo':>10s}  {'12H_up':>10s}  {'12H_cp':>7s}"
+        f"  {'1D_lo':>10s}  {'1D_up':>10s}  {'1D_cp':>7s}"
+        f"  {'CPagg':>7s}  {'Trend':>9s}  {'Rule':>16s}  Reason"
+    )
+    lines.append(hdr)
+    lines.append("  " + "-" * (W - 2))
+
+    for r in rows:
+        b = r.get("channel_bounds_by_tf") or {}
+
+        def lo(tf): return _audit_bound(b, tf, "lower")
+        def up(tf): return _audit_bound(b, tf, "upper")
+        def cp(tf): return _audit_bound(b, tf, "cp")
+
+        cpagg_s  = f"{r['cpagg']:.4f}"  if r["cpagg"]  is not None else "N/A"
+        trend_s  = r["trend_state"] or "N/A"
+        rule_s   = r["decision_rule"] or "N/A"
+        reason_s = r["decision_reason"] or ""
+
+        line = (
+            f"  {r['ts']:20s}  {r['price']:>10.6f}"
+            f"  {lo('1H'):>10s}  {up('1H'):>10s}  {cp('1H'):>7s}"
+            f"  {lo('4H'):>10s}  {up('4H'):>10s}  {cp('4H'):>7s}"
+            f"  {lo('12H'):>10s}  {up('12H'):>10s}  {cp('12H'):>7s}"
+            f"  {lo('1D'):>10s}  {up('1D'):>10s}  {cp('1D'):>7s}"
+            f"  {cpagg_s:>7s}  {trend_s:>9s}  {rule_s:>16s}  {reason_s}"
+        )
+        lines.append(line)
+
+    lines += ["", "=" * W]
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -821,12 +963,14 @@ def main(argv=None) -> None:
     txt_path  = os.path.join(REPORTS_DIR, f"channel_decision_backtest_xrp_{args.days}d.txt")
 
     result = run(
-        tf_config    = tf_config,
-        replay_days  = args.days,
-        start_equity = args.equity,
-        fee_rate     = args.fee,
-        slippage     = args.slippage,
-        verbose      = args.verbose,
+        tf_config            = tf_config,
+        replay_days          = args.days,
+        start_equity         = args.equity,
+        fee_rate             = args.fee,
+        slippage             = args.slippage,
+        verbose              = args.verbose,
+        audit_trade          = args.audit_trade,
+        audit_window_minutes = args.audit_window_minutes,
     )
 
     with open(json_path, "w", encoding="utf-8") as f:
@@ -835,6 +979,30 @@ def main(argv=None) -> None:
 
     _write_txt(txt_path, result)
     print(f"TXT  report : {txt_path}")
+
+    # Audit report (if requested)
+    if args.audit_trade is not None:
+        audit_rows = result.get("audit_rows", [])
+        # Find the trade object for the header
+        all_trades = result.get("trades_first_20", []) + result.get("trades_last_20", [])
+        trade_obj  = next(
+            (t for t in all_trades if t.get("trade_num") == args.audit_trade), {}
+        )
+        if not audit_rows:
+            print(f"\n[audit] No rows collected for trade #{args.audit_trade}. "
+                  f"Trade may not exist or BUY never fired.")
+        else:
+            audit_json = os.path.join(
+                REPORTS_DIR, f"channel_decision_audit_trade_{args.audit_trade}.json"
+            )
+            audit_txt  = os.path.join(
+                REPORTS_DIR, f"channel_decision_audit_trade_{args.audit_trade}.txt"
+            )
+            _write_audit_json(audit_json, result, trade_obj)
+            _write_audit_txt(audit_txt,  result, trade_obj)
+            print(f"\nAudit JSON  : {audit_json}")
+            print(f"Audit TXT   : {audit_txt}")
+            print(f"  Rows collected : {len(audit_rows)}")
 
     # Console summary
     s = result["summary"]
