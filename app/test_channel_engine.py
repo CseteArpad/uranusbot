@@ -155,7 +155,27 @@ class TestBuildParallelChannel(unittest.TestCase):
         lows  = _flat_lows(4)
         ch = ce.build_parallel_channel(highs, lows, left=3, right=3)
         self.assertFalse(ch["valid"])
-        self.assertEqual(ch["reason"], "insufficient_bars")
+        self.assertEqual(ch["reason"], ce.REASON_INSUFFICIENT_PIVOT_LOWS)
+
+    def test_invalid_returns_pivot_counts(self):
+        # Even on failure, pivot_low_count and pivot_high_count are present
+        highs = _flat_highs(30)
+        lows  = _flat_lows(30)
+        ch = ce.build_parallel_channel(highs, lows, left=3, right=3)
+        self.assertFalse(ch["valid"])
+        self.assertIn("pivot_low_count",  ch)
+        self.assertIn("pivot_high_count", ch)
+
+    def test_valid_returns_pivot_counts(self):
+        highs, lows = _make_candles(
+            n=40,
+            pl_idxs=[8, 22], pl_vals=[0.70, 0.70],
+            ph_idxs=[15],    ph_vals=[1.90],
+        )
+        ch = ce.build_parallel_channel(highs, lows, left=3, right=3)
+        self.assertTrue(ch["valid"])
+        self.assertGreaterEqual(ch["pivot_low_count"],  2)
+        self.assertGreaterEqual(ch["pivot_high_count"], 1)
 
     def test_upper_above_lower_at_all_indices(self):
         highs, lows = _make_candles(
