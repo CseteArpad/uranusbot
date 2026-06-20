@@ -13,21 +13,38 @@ IN   = cde.POSITION_IN_POSITION
 
 
 class TestFlatPanicBuy(unittest.TestCase):
+    # PANIC_BUY is disabled by default (enable_panic_buy=False).
+    # All default-mode tests expect HOLD + PANIC_BUY_DISABLED.
+    # Explicit enable_panic_buy=True tests verify the rule still works when opted in.
 
-    def test_panic_buy_at_threshold(self):
-        # cpagg == 1.01 → PANIC_BUY (boundary inclusive)
+    def test_panic_buy_disabled_by_default_at_threshold(self):
         r = cde.evaluate(FLAT, cpagg=1.01, prev_cpagg=0.50)
-        self.assertEqual(r.action, cde.ACTION_BUY)
-        self.assertEqual(r.rule,   cde.RULE_PANIC_BUY)
+        self.assertEqual(r.action, cde.ACTION_HOLD)
+        self.assertEqual(r.reason, cde.REASON_PANIC_BUY_DISABLED)
 
-    def test_panic_buy_above_threshold(self):
+    def test_panic_buy_disabled_by_default_above_threshold(self):
         r = cde.evaluate(FLAT, cpagg=1.20, prev_cpagg=None)
+        self.assertEqual(r.action, cde.ACTION_HOLD)
+        self.assertEqual(r.reason, cde.REASON_PANIC_BUY_DISABLED)
+
+    def test_panic_buy_disabled_no_prev_cpagg_needed(self):
+        # Even without prev_cpagg, disabled panic gives HOLD (not missing-prev error)
+        r = cde.evaluate(FLAT, cpagg=1.05, prev_cpagg=None)
+        self.assertEqual(r.action, cde.ACTION_HOLD)
+        self.assertEqual(r.reason, cde.REASON_PANIC_BUY_DISABLED)
+
+    def test_panic_buy_enabled_at_threshold(self):
+        r = cde.evaluate(FLAT, cpagg=1.01, prev_cpagg=0.50, enable_panic_buy=True)
         self.assertEqual(r.action, cde.ACTION_BUY)
         self.assertEqual(r.rule,   cde.RULE_PANIC_BUY)
 
-    def test_panic_buy_does_not_need_prev_cpagg(self):
-        # prev_cpagg None must not block panic rule
-        r = cde.evaluate(FLAT, cpagg=1.05, prev_cpagg=None)
+    def test_panic_buy_enabled_above_threshold(self):
+        r = cde.evaluate(FLAT, cpagg=1.20, prev_cpagg=None, enable_panic_buy=True)
+        self.assertEqual(r.action, cde.ACTION_BUY)
+        self.assertEqual(r.rule,   cde.RULE_PANIC_BUY)
+
+    def test_panic_buy_enabled_does_not_need_prev_cpagg(self):
+        r = cde.evaluate(FLAT, cpagg=1.05, prev_cpagg=None, enable_panic_buy=True)
         self.assertEqual(r.action, cde.ACTION_BUY)
         self.assertEqual(r.rule,   cde.RULE_PANIC_BUY)
 
@@ -164,15 +181,28 @@ class TestMissingCpagg(unittest.TestCase):
 
 class TestPanicPriority(unittest.TestCase):
 
-    def test_panic_buy_overrides_standard_buy_zone(self):
+    def test_panic_buy_overrides_standard_buy_zone_when_enabled(self):
         # cpagg >= panic threshold AND <= buy_zone_threshold simultaneously
-        # (only possible with custom thresholds — verify panic wins)
+        # enable_panic_buy=True required for PANIC_BUY to fire
         r = cde.evaluate(
             FLAT, cpagg=0.15, prev_cpagg=0.10,
             panic_buy_threshold=0.15,    # lower threshold for test
             buy_zone_threshold=0.20,
+            enable_panic_buy=True,
         )
         self.assertEqual(r.rule, cde.RULE_PANIC_BUY)
+
+    def test_panic_buy_disabled_gives_hold_not_standard_buy(self):
+        # When panic_buy fires the threshold check but is disabled,
+        # it must NOT fall through to STANDARD_BUY — must give HOLD.
+        r = cde.evaluate(
+            FLAT, cpagg=0.15, prev_cpagg=0.10,
+            panic_buy_threshold=0.15,
+            buy_zone_threshold=0.20,
+            enable_panic_buy=False,
+        )
+        self.assertEqual(r.action, cde.ACTION_HOLD)
+        self.assertEqual(r.reason, cde.REASON_PANIC_BUY_DISABLED)
 
     def test_panic_sell_overrides_standard_sell_zone(self):
         r = cde.evaluate(

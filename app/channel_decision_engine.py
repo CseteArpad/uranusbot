@@ -35,6 +35,7 @@ REASON_MISSING_PREV_CPAGG = "MISSING_PREV_CPAGG"
 REASON_NO_SIGNAL          = "NO_SIGNAL"
 REASON_PRICE_NOT_RISING   = "PRICE_NOT_RISING"
 REASON_PRICE_NOT_FALLING  = "PRICE_NOT_FALLING"
+REASON_PANIC_BUY_DISABLED = "PANIC_BUY_DISABLED"
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +66,7 @@ def evaluate(
     panic_sell_threshold: float = PANIC_SELL_THRESHOLD,
     buy_zone_threshold:   float = BUY_ZONE_THRESHOLD,
     sell_zone_threshold:  float = SELL_ZONE_THRESHOLD,
+    enable_panic_buy:     bool  = False,
 ) -> DecisionResult:
     """
     Evaluate the current channel position and return a trading decision.
@@ -74,12 +76,13 @@ def evaluate(
     - IN_POSITION → can only produce SELL or HOLD
 
     Rule priority (high → low):
-    1. PANIC  — triggered by extreme CPagg; does not require prev_cpagg
-    2. STANDARD — triggered in zone with confirming momentum
-    3. HOLD   — default when no rule fires
+    1. PANIC_SELL — triggered by extreme low CPagg; does not require prev_cpagg
+    2. PANIC_BUY  — disabled by default (enable_panic_buy=False); FÁZIS 3C decision
+    3. STANDARD   — triggered in zone with confirming momentum
+    4. HOLD       — default when no rule fires
 
     trend_state is carried through for reporting; it does NOT gate rules
-    in FÁZIS 3A (trendgate comes in FÁZIS 3B/3C).
+    in FÁZIS 3A/3C (trendgate comes in a later phase).
     """
     def _hold(reason: str) -> DecisionResult:
         return DecisionResult(
@@ -93,14 +96,16 @@ def evaluate(
         return _hold(REASON_MISSING_CPAGG)
 
     if position_state == POSITION_FLAT:
-        # 1. Panic buy — price broke far above upper band
+        # 1. Panic buy — disabled by default; skip and fall through
         if cpagg >= panic_buy_threshold:
-            return DecisionResult(
-                action=ACTION_BUY, rule=RULE_PANIC_BUY,
-                reason=f"cpagg={cpagg:.4f} >= panic_buy_threshold={panic_buy_threshold}",
-                cpagg=cpagg, prev_cpagg=prev_cpagg,
-                trend_state=trend_state, position_state=position_state,
-            )
+            if enable_panic_buy:
+                return DecisionResult(
+                    action=ACTION_BUY, rule=RULE_PANIC_BUY,
+                    reason=f"cpagg={cpagg:.4f} >= panic_buy_threshold={panic_buy_threshold}",
+                    cpagg=cpagg, prev_cpagg=prev_cpagg,
+                    trend_state=trend_state, position_state=position_state,
+                )
+            return _hold(REASON_PANIC_BUY_DISABLED)
 
         # 2. Standard buy — price in buy zone and rising (momentum confirmation)
         if cpagg <= buy_zone_threshold:
