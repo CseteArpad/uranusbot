@@ -18,6 +18,13 @@ from app.research_engine import (
     compute_signal_reason_stats,
     build_top10,
 )
+from app.research_dimension_engine import (
+    compute_symbol_performance,
+    compute_timeframe_performance,
+    compute_symbol_timeframe_performance,
+    compute_signal_reason_performance,
+    build_best_dimensions,
+)
 
 BASE = Path(".")
 DATA_DIR = BASE / "data" / "candles"
@@ -478,6 +485,46 @@ def main():
         combined_research = pd.DataFrame()
         research_df = sig_reason_df = top10_df = pd.DataFrame()
 
+    # --- Write FÁZIS 6A dimension reports ---
+    sym_perf_path    = REPORT_DIR / "symbol_performance.csv"
+    tf_perf_path     = REPORT_DIR / "timeframe_performance.csv"
+    symtf_perf_path  = REPORT_DIR / "symbol_timeframe_performance.csv"
+    best_dim_path    = REPORT_DIR / "best_dimensions.csv"
+
+    perf_all_cols = [
+        "count",
+        "avg_return_4",  "avg_return_12",  "avg_return_24",  "avg_return_48",
+        "winrate_4",     "winrate_12",     "winrate_24",     "winrate_48",
+    ]
+    best_dim_cols = [
+        "dimension_type", "dimension_value",
+        "count",
+        "avg_return_4",  "avg_return_12",  "avg_return_24",  "avg_return_48",
+        "winrate_4",     "winrate_12",     "winrate_24",     "winrate_48",
+    ]
+
+    if not combined_research.empty:
+        sym_perf_df   = compute_symbol_performance(combined_research)
+        tf_perf_df    = compute_timeframe_performance(combined_research)
+        symtf_perf_df = compute_symbol_timeframe_performance(combined_research)
+        srp_df        = compute_signal_reason_performance(combined_research)
+        best_dim_df   = build_best_dimensions(
+            sym_perf_df, tf_perf_df, symtf_perf_df, srp_df
+        )
+
+        sym_perf_df.to_csv(
+            sym_perf_path, sep=";", index=False,
+            columns=["symbol"] + perf_all_cols
+        )
+        tf_perf_df.to_csv(
+            tf_perf_path, sep=";", index=False,
+            columns=["timeframe"] + perf_all_cols
+        )
+        symtf_perf_df.to_csv(symtf_perf_path, sep=";", index=False)
+        best_dim_df.to_csv(best_dim_path, sep=";", index=False)
+    else:
+        sym_perf_df = tf_perf_df = symtf_perf_df = best_dim_df = pd.DataFrame()
+
     state = load_state()
     state["last_run"] = utc_now()
     save_state(state)
@@ -497,6 +544,11 @@ def main():
         print(f"Kész: {research_path}  ({n_cond} feltétel, {n_res} sor)")
         print(f"Kész: {sig_reason_path}")
         print(f"Kész: {top10_path}  ({len(top10_df)} sor)")
+    if not combined_research.empty:
+        print(f"Kész: {sym_perf_path}  ({len(sym_perf_df)} sor)")
+        print(f"Kész: {tf_perf_path}  ({len(tf_perf_df)} sor)")
+        print(f"Kész: {symtf_perf_path}  ({len(symtf_perf_df)} sor)")
+        print(f"Kész: {best_dim_path}  ({len(best_dim_df)} sor)")
 
 
 if __name__ == "__main__":
