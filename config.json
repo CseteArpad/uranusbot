@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "symbols": ["XRPUSDC", "BTCUSDC", "ETHUSDC", "SOLUSDC"],
+  "timeframes": ["1h", "4h", "12h", "1d"],
+  "pivot_left": 3,
+  "pivot_right": 3,
+  "atr_period": 14,
+  "atr_multiplier": 0.5,
+  "replay_days": 180
+}
