@@ -26,6 +26,7 @@ from app.research_dimension_engine import (
     build_best_dimensions,
 )
 from app.edge_finder_engine import compute_edge_grid, build_top_edges
+from app.edge_validation_engine import validate_edges, build_validated_edges
 
 BASE = Path(".")
 DATA_DIR = BASE / "data" / "candles"
@@ -533,10 +534,26 @@ def main():
 
         edge_df.to_csv(edge_path, sep=";", index=False)
         top_edge_df.to_csv(top_edge_path, sep=";", index=False)
+
+        # --- Write FÁZIS 6C edge validation reports ---
+        edge_validation_path  = REPORT_DIR / "edge_validation.csv"
+        validated_edges_path  = REPORT_DIR / "validated_edges.csv"
+
+        ab_edges = top_edge_df[
+            top_edge_df["EDGE_GRADE"].isin({"A", "B"})
+        ].copy() if not top_edge_df.empty else pd.DataFrame()
+
+        validation_df  = validate_edges(ab_edges, combined_research)
+        validated_df   = build_validated_edges(validation_df)
+
+        validation_df.to_csv(edge_validation_path,  sep=";", index=False)
+        validated_df.to_csv(validated_edges_path,   sep=";", index=False)
     else:
         sym_perf_df = tf_perf_df = symtf_perf_df = best_dim_df = pd.DataFrame()
         edge_df = top_edge_df = pd.DataFrame()
+        validation_df = validated_df = pd.DataFrame()
         edge_path = top_edge_path = None
+        edge_validation_path = validated_edges_path = None
 
     state = load_state()
     state["last_run"] = utc_now()
@@ -568,6 +585,12 @@ def main():
             n_c = int((top_edge_df["EDGE_GRADE"] == "C").sum()) if not top_edge_df.empty else 0
             print(f"Kész: {edge_path}  ({len(edge_df)} kombináció)")
             print(f"Kész: {top_edge_path}  (A={n_a} B={n_b} C={n_c})")
+        if edge_validation_path:
+            n_strong   = int((validation_df["EDGE_STABILITY"] == "STRONG").sum())   if not validation_df.empty else 0
+            n_moderate = int((validation_df["EDGE_STABILITY"] == "MODERATE").sum()) if not validation_df.empty else 0
+            n_weak     = int((validation_df["EDGE_STABILITY"] == "WEAK").sum())     if not validation_df.empty else 0
+            print(f"Kész: {edge_validation_path}  (STRONG={n_strong} MODERATE={n_moderate} WEAK={n_weak})")
+            print(f"Kész: {validated_edges_path}  ({len(validated_df)} sor)")
 
 
 if __name__ == "__main__":
