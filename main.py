@@ -33,6 +33,11 @@ from app.shadow_edge_engine import (
     compute_live_edge_tracking,
     build_promotion_candidates,
 )
+from app.edge_evolution_engine import (
+    compute_edge_evolution,
+    build_evolution_ranking,
+    build_promising_edges,
+)
 
 BASE = Path(".")
 DATA_DIR = BASE / "data" / "candles"
@@ -571,14 +576,29 @@ def main():
         shadow_perf_df.to_csv(shadow_perf_path,   sep=";", index=False)
         live_track_df.to_csv(live_tracking_path,  sep=";", index=False)
         promotion_df.to_csv(promotion_path,        sep=";", index=False)
+
+        # --- Write FÁZIS 6D.1 edge evolution reports ---
+        edge_evolution_path  = REPORT_DIR / "edge_evolution.csv"
+        evolution_rank_path  = REPORT_DIR / "evolution_ranking.csv"
+        promising_edges_path = REPORT_DIR / "promising_edges.csv"
+
+        evolution_df   = compute_edge_evolution(shadow_df)
+        evol_rank_df   = build_evolution_ranking(evolution_df)
+        promising_df   = build_promising_edges(evolution_df)
+
+        evolution_df.to_csv(edge_evolution_path,  sep=";", index=False)
+        evol_rank_df.to_csv(evolution_rank_path,  sep=";", index=False)
+        promising_df.to_csv(promising_edges_path, sep=";", index=False)
     else:
         sym_perf_df = tf_perf_df = symtf_perf_df = best_dim_df = pd.DataFrame()
         edge_df = top_edge_df = pd.DataFrame()
         validation_df = validated_df = pd.DataFrame()
         shadow_df = shadow_perf_df = live_track_df = promotion_df = pd.DataFrame()
+        evolution_df = evol_rank_df = promising_df = pd.DataFrame()
         edge_path = top_edge_path = None
         edge_validation_path = validated_edges_path = None
         shadow_signals_path = shadow_perf_path = live_tracking_path = promotion_path = None
+        edge_evolution_path = evolution_rank_path = promising_edges_path = None
 
     state = load_state()
     state["last_run"] = utc_now()
@@ -623,6 +643,15 @@ def main():
             print(f"Kész: {shadow_perf_path}")
             print(f"Kész: {live_tracking_path}  ({len(live_track_df)} edge)")
             print(f"Kész: {promotion_path}  ({n_promo} promotion jelölt)")
+        if edge_evolution_path:
+            n_acc  = int((evolution_df["evolution_status"] == "ACCELERATING").sum()) if not evolution_df.empty else 0
+            n_imp  = int((evolution_df["evolution_status"] == "IMPROVING").sum())    if not evolution_df.empty else 0
+            n_sta  = int((evolution_df["evolution_status"] == "STABLE").sum())       if not evolution_df.empty else 0
+            n_deg  = int((evolution_df["evolution_status"] == "DEGRADING").sum())    if not evolution_df.empty else 0
+            n_prom = len(promising_df)
+            print(f"Kész: {edge_evolution_path}  (ACCELERATING={n_acc} IMPROVING={n_imp} STABLE={n_sta} DEGRADING={n_deg})")
+            print(f"Kész: {evolution_rank_path}  ({len(evol_rank_df)} sor)")
+            print(f"Kész: {promising_edges_path}  ({n_prom} PROMISING_EDGE)")
 
 
 if __name__ == "__main__":
