@@ -11,6 +11,7 @@ from app.pivot_engine import detect_pivot_flags
 from app.atr_engine import calculate_atr_series
 from app.state_manager import load_state, save_state
 from app.zone_engine import classify_zone, classify_candidate
+from app.candidate_audit_engine import audit_candidates, build_performance_summary
 
 BASE = Path(".")
 DATA_DIR = BASE / "data" / "candles"
@@ -288,7 +289,9 @@ def main():
     rpagg_summaries = []
 
     # symbol_tf_rows[symbol][tf] = [row_dict, ...]
+    # symbol_tf_dfs[symbol][tf]  = original candle DataFrame (for FÁZIS 4 audit)
     symbol_tf_rows = {sym: {} for sym in cfg["symbols"]}
+    symbol_tf_dfs  = {sym: {} for sym in cfg["symbols"]}
 
     for symbol in cfg["symbols"]:
         for tf in cfg["timeframes"]:
@@ -311,17 +314,24 @@ def main():
 
             rows, summary = run_replay(df, symbol, tf, cfg)
             symbol_tf_rows[symbol][tf] = rows
+            symbol_tf_dfs[symbol][tf]  = df
             summaries.append(summary)
 
-    # RPagg + Bias — per symbol, cross-TF merge
+    # RPagg + Bias + FÁZIS 4 candidate audit — per symbol, cross-TF merge
     all_rows = []
+    all_audit_dfs = []
     for symbol in cfg["symbols"]:
         tf_rows = symbol_tf_rows[symbol]
         if not tf_rows:
             continue
         enriched = compute_rpagg_for_symbol(tf_rows)
-        for tf_rows_list in enriched.values():
+        for tf, tf_rows_list in enriched.items():
             all_rows.extend(tf_rows_list)
+            df_c = symbol_tf_dfs.get(symbol, {}).get(tf)
+            if df_c is not None:
+                adf = audit_candidates(tf_rows_list, df_c, symbol, tf)
+                if not adf.empty:
+                    all_audit_dfs.append(adf)
         rpagg_summaries.append(build_rpagg_summary(symbol, enriched))
 
     # --- Write replay_results.csv ---
@@ -405,6 +415,34 @@ def main():
         writer.writeheader()
         writer.writerows(cand_stats.values())
 
+    # --- Write candidate_audit.csv (FÁZIS 4) ---
+    candidate_audit_path = REPORT_DIR / "candidate_audit.csv"
+    audit_fields = [
+        "timestamp", "symbol", "timeframe",
+        "candidate_signal", "signal_reason", "close_at_signal",
+        "return_4",  "return_12",  "return_24",  "return_48",
+        "winner_4",  "winner_12",  "winner_24",  "winner_48",
+    ]
+    if all_audit_dfs:
+        combined_audit = pd.concat(all_audit_dfs, ignore_index=True)
+        combined_audit.to_csv(
+            candidate_audit_path, sep=";", index=False,
+            columns=audit_fields, float_format="%.6f"
+        )
+
+        # --- Write candidate_performance.csv (FÁZIS 4) ---
+        perf_df = build_performance_summary(combined_audit)
+        perf_path = REPORT_DIR / "candidate_performance.csv"
+        perf_fields = [
+            "candidate_signal", "count",
+            "avg_return_4",  "avg_return_12",  "avg_return_24",  "avg_return_48",
+            "winrate_4",     "winrate_12",     "winrate_24",     "winrate_48",
+        ]
+        perf_df.to_csv(perf_path, sep=";", index=False, columns=perf_fields)
+    else:
+        combined_audit = pd.DataFrame()
+        perf_path = None
+
     state = load_state()
     state["last_run"] = utc_now()
     save_state(state)
@@ -415,6 +453,9 @@ def main():
     if rpagg_summaries:
         print(f"Kész: {REPORT_DIR / 'rpagg_summary.csv'}")
     print(f"Kész: {candidate_summary_path}")
+    if all_audit_dfs:
+        print(f"Kész: {candidate_audit_path}  ({len(combined_audit)} sor)")
+        print(f"Kész: {perf_path}")
 
 
 if __name__ == "__main__":
