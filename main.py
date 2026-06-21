@@ -27,6 +27,12 @@ from app.research_dimension_engine import (
 )
 from app.edge_finder_engine import compute_edge_grid, build_top_edges
 from app.edge_validation_engine import validate_edges, build_validated_edges
+from app.shadow_edge_engine import (
+    compute_shadow_signals,
+    compute_shadow_performance,
+    compute_live_edge_tracking,
+    build_promotion_candidates,
+)
 
 BASE = Path(".")
 DATA_DIR = BASE / "data" / "candles"
@@ -548,12 +554,31 @@ def main():
 
         validation_df.to_csv(edge_validation_path,  sep=";", index=False)
         validated_df.to_csv(validated_edges_path,   sep=";", index=False)
+
+        # --- Write FÁZIS 6D shadow edge tracking reports ---
+        shadow_signals_path    = REPORT_DIR / "shadow_signals.csv"
+        shadow_perf_path       = REPORT_DIR / "shadow_performance.csv"
+        live_tracking_path     = REPORT_DIR / "live_edge_tracking.csv"
+        promotion_path         = REPORT_DIR / "promotion_candidates.csv"
+
+        shadow_df      = compute_shadow_signals(validated_df, combined_research)
+        shadow_perf_df = compute_shadow_performance(shadow_df)
+        live_track_df  = compute_live_edge_tracking(shadow_df)
+        promotion_df   = build_promotion_candidates(live_track_df)
+
+        shadow_df.to_csv(shadow_signals_path, sep=";", index=False,
+                         float_format="%.6f")
+        shadow_perf_df.to_csv(shadow_perf_path,   sep=";", index=False)
+        live_track_df.to_csv(live_tracking_path,  sep=";", index=False)
+        promotion_df.to_csv(promotion_path,        sep=";", index=False)
     else:
         sym_perf_df = tf_perf_df = symtf_perf_df = best_dim_df = pd.DataFrame()
         edge_df = top_edge_df = pd.DataFrame()
         validation_df = validated_df = pd.DataFrame()
+        shadow_df = shadow_perf_df = live_track_df = promotion_df = pd.DataFrame()
         edge_path = top_edge_path = None
         edge_validation_path = validated_edges_path = None
+        shadow_signals_path = shadow_perf_path = live_tracking_path = promotion_path = None
 
     state = load_state()
     state["last_run"] = utc_now()
@@ -591,6 +616,13 @@ def main():
             n_weak     = int((validation_df["EDGE_STABILITY"] == "WEAK").sum())     if not validation_df.empty else 0
             print(f"Kész: {edge_validation_path}  (STRONG={n_strong} MODERATE={n_moderate} WEAK={n_weak})")
             print(f"Kész: {validated_edges_path}  ({len(validated_df)} sor)")
+        if shadow_signals_path:
+            n_shadow = len(shadow_df)
+            n_promo  = len(promotion_df)
+            print(f"Kész: {shadow_signals_path}  ({n_shadow} shadow jel)")
+            print(f"Kész: {shadow_perf_path}")
+            print(f"Kész: {live_tracking_path}  ({len(live_track_df)} edge)")
+            print(f"Kész: {promotion_path}  ({n_promo} promotion jelölt)")
 
 
 if __name__ == "__main__":
