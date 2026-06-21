@@ -71,3 +71,14 @@ def find_pivots(df: pd.DataFrame, left: int = 3, right: int = 3) -> pd.DataFrame
     df["pivot_low"] = pivot_low
     df["pivot_high"] = pivot_high
     return df
+
+
+def detect_pivot_flags(
+    df: pd.DataFrame, left: int = 3, right: int = 3
+) -> tuple:
+    """
+    Wrapper used by main.py replay loop.
+    Returns (pivot_low_array, pivot_high_array) as numpy bool arrays.
+    """
+    result = find_pivots(df, left=left, right=right)
+    return result["pivot_low"].to_numpy(), result["pivot_high"].to_numpy()
