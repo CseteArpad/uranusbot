@@ -25,6 +25,7 @@ from app.research_dimension_engine import (
     compute_signal_reason_performance,
     build_best_dimensions,
 )
+from app.edge_finder_engine import compute_edge_grid, build_top_edges
 
 BASE = Path(".")
 DATA_DIR = BASE / "data" / "candles"
@@ -522,8 +523,20 @@ def main():
         )
         symtf_perf_df.to_csv(symtf_perf_path, sep=";", index=False)
         best_dim_df.to_csv(best_dim_path, sep=";", index=False)
+
+        # --- Write FÁZIS 6B edge finder reports ---
+        edge_path     = REPORT_DIR / "edge_finder.csv"
+        top_edge_path = REPORT_DIR / "top_edges.csv"
+
+        edge_df     = compute_edge_grid(combined_research)
+        top_edge_df = build_top_edges(edge_df)
+
+        edge_df.to_csv(edge_path, sep=";", index=False)
+        top_edge_df.to_csv(top_edge_path, sep=";", index=False)
     else:
         sym_perf_df = tf_perf_df = symtf_perf_df = best_dim_df = pd.DataFrame()
+        edge_df = top_edge_df = pd.DataFrame()
+        edge_path = top_edge_path = None
 
     state = load_state()
     state["last_run"] = utc_now()
@@ -549,6 +562,12 @@ def main():
         print(f"Kész: {tf_perf_path}  ({len(tf_perf_df)} sor)")
         print(f"Kész: {symtf_perf_path}  ({len(symtf_perf_df)} sor)")
         print(f"Kész: {best_dim_path}  ({len(best_dim_df)} sor)")
+        if edge_path:
+            n_a = int((top_edge_df["EDGE_GRADE"] == "A").sum()) if not top_edge_df.empty else 0
+            n_b = int((top_edge_df["EDGE_GRADE"] == "B").sum()) if not top_edge_df.empty else 0
+            n_c = int((top_edge_df["EDGE_GRADE"] == "C").sum()) if not top_edge_df.empty else 0
+            print(f"Kész: {edge_path}  ({len(edge_df)} kombináció)")
+            print(f"Kész: {top_edge_path}  (A={n_a} B={n_b} C={n_c})")
 
 
 if __name__ == "__main__":
