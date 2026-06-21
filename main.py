@@ -12,6 +12,12 @@ from app.atr_engine import calculate_atr_series
 from app.state_manager import load_state, save_state
 from app.zone_engine import classify_zone, classify_candidate
 from app.candidate_audit_engine import audit_candidates, build_performance_summary
+from app.research_engine import (
+    enrich_with_forward_closes,
+    compute_research_stats,
+    compute_signal_reason_stats,
+    build_top10,
+)
 
 BASE = Path(".")
 DATA_DIR = BASE / "data" / "candles"
@@ -317,9 +323,10 @@ def main():
             symbol_tf_dfs[symbol][tf]  = df
             summaries.append(summary)
 
-    # RPagg + Bias + FÁZIS 4 candidate audit — per symbol, cross-TF merge
+    # RPagg + Bias + FÁZIS 4 audit + FÁZIS 5 research — per symbol, cross-TF merge
     all_rows = []
-    all_audit_dfs = []
+    all_audit_dfs    = []
+    all_research_dfs = []
     for symbol in cfg["symbols"]:
         tf_rows = symbol_tf_rows[symbol]
         if not tf_rows:
@@ -332,6 +339,9 @@ def main():
                 adf = audit_candidates(tf_rows_list, df_c, symbol, tf)
                 if not adf.empty:
                     all_audit_dfs.append(adf)
+                rdf = enrich_with_forward_closes(tf_rows_list, df_c, symbol, tf)
+                if not rdf.empty:
+                    all_research_dfs.append(rdf)
         rpagg_summaries.append(build_rpagg_summary(symbol, enriched))
 
     # --- Write replay_results.csv ---
@@ -443,6 +453,31 @@ def main():
         combined_audit = pd.DataFrame()
         perf_path = None
 
+    # --- Write FÁZIS 5 research reports ---
+    research_path      = REPORT_DIR / "research_summary.csv"
+    sig_reason_path    = REPORT_DIR / "signal_reason_summary.csv"
+    top10_path         = REPORT_DIR / "top10_conditions.csv"
+
+    research_cols = [
+        "condition", "count",
+        "avg_return_4",  "avg_return_12",  "avg_return_24",  "avg_return_48",
+        "winrate_4",     "winrate_12",     "winrate_24",     "winrate_48",
+    ]
+    if all_research_dfs:
+        combined_research = pd.concat(all_research_dfs, ignore_index=True)
+
+        research_df = compute_research_stats(combined_research)
+        research_df.to_csv(research_path, sep=";", index=False, columns=research_cols)
+
+        sig_reason_df = compute_signal_reason_stats(combined_research)
+        sig_reason_df.to_csv(sig_reason_path, sep=";", index=False)
+
+        top10_df = build_top10(research_df)
+        top10_df.to_csv(top10_path, sep=";", index=False, columns=research_cols)
+    else:
+        combined_research = pd.DataFrame()
+        research_df = sig_reason_df = top10_df = pd.DataFrame()
+
     state = load_state()
     state["last_run"] = utc_now()
     save_state(state)
@@ -456,6 +491,12 @@ def main():
     if all_audit_dfs:
         print(f"Kész: {candidate_audit_path}  ({len(combined_audit)} sor)")
         print(f"Kész: {perf_path}")
+    if all_research_dfs:
+        n_cond = len(research_df)
+        n_res  = len(combined_research)
+        print(f"Kész: {research_path}  ({n_cond} feltétel, {n_res} sor)")
+        print(f"Kész: {sig_reason_path}")
+        print(f"Kész: {top10_path}  ({len(top10_df)} sor)")
 
 
 if __name__ == "__main__":
