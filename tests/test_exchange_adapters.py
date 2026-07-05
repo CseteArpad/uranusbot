@@ -58,8 +58,8 @@ class TestAdapterBasics:
 
 
 class TestSkeletonMethodsRaise:
+    # get_ticker a FÁZIS 7.5.3a-ban implementálva lett - kikerült a listából.
     CALLS = [
-        ("get_ticker", ("XRP/USDC",)),
         ("get_ohlcv", ("XRP/USDC", "1h")),
         ("get_balances", ()),
         ("create_order", ("XRP/USDC", "buy", "market", 1.0)),

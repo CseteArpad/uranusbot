@@ -17,6 +17,7 @@ from .exceptions import (
     AdapterNotConfiguredError,
     ExchangeError,
     InvalidPairError,
+    TickerFetchError,
     UnsupportedExchangeError,
 )
 from .manager import ExchangeManager, clear_adapter_cache, get_exchange_adapter
@@ -32,6 +33,7 @@ __all__ = [
     "OKXAdapter",
     "ExchangeError",
     "InvalidPairError",
+    "TickerFetchError",
     "UnsupportedExchangeError",
     "AdapterNotConfiguredError",
 ]

@@ -6,7 +6,9 @@ A tényleges implementáció (ticker/ohlcv/balance/order) FÁZIS 7.5.3+.
 """
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from . import pair_utils
@@ -30,6 +32,23 @@ class ExchangeAdapter(ABC):
     def normalize_pair(self, pair: str) -> str:
         """Bármely dialektusból kanonikus 'BASE/QUOTE' formátum."""
         return pair_utils.normalize_pair(pair)
+
+    def _build_ticker(self, pair: str, symbol: str, price: float) -> Dict[str, Any]:
+        """Egységes ticker-dict (a price_sources.get_tick örökölt formátuma)."""
+        now = time.time()
+        ts_utc = (
+            datetime.fromtimestamp(now, tz=timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        return {
+            "pair": pair,
+            "symbol": symbol,
+            "price": float(price),
+            "ts": int(now),
+            "ts_utc": ts_utc,
+            "source": self.name,
+        }
 
     @property
     @abstractmethod

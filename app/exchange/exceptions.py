@@ -20,3 +20,7 @@ class UnsupportedExchangeError(ExchangeError):
 
 class AdapterNotConfiguredError(ExchangeError):
     """Hiányzó vagy üres exchange-konfiguráció."""
+
+
+class TickerFetchError(ExchangeError):
+    """Ticker-lekérdezés hibája: hálózati hiba, HTTP hiba vagy érvénytelen válasz."""
