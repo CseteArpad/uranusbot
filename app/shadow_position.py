@@ -83,6 +83,9 @@ def _ensure_shadow_section(state: dict) -> dict:
     shadow.setdefault("equity_last_sync_source", None)
     shadow.setdefault("equity_last_sync_value", None)
     shadow.setdefault("equity_sync_failures", 0)
+    # U-0.4: a LEGUTÓBBI flat-sync eredménye. Ez a fail-closed kapu bemenete,
+    # nem a kumulatív hibaszámláló.
+    shadow.setdefault("equity_sync_ok_last_tick", False)
 
     if not isinstance(shadow.get("cycle"), dict):
         shadow["cycle"] = {}
@@ -332,9 +335,20 @@ def fetch_shadow_equity_from_live(state: dict) -> Tuple[Optional[float], str]:
     return None, "unavailable"
 
 
-def _shadow_sync_equity_if_flat(state: dict, shadow: dict) -> None:
+def _shadow_sync_equity_if_flat(state: dict, shadow: dict) -> dict:
+    """
+    U-0.4 (9.): a szinkron EREDMÉNYÉT is visszaadja, nem csak mellékhatásként
+    frissít. A hívó ebből dönti el, hogy nyitható-e ÚJ shadow pozíció.
+
+    Returns:
+        {"attempted": bool, "ok": bool, "source": str}
+        - attempted=False  -> pozícióban vagyunk, szándékosan nem szinkronizálunk
+        - ok=True          -> a jelenlegi tickben érvényes equity-forrás volt
+    """
     if bool(shadow.get("in_position", False)):
-        return  # Never sync mid-position — real balance reflects live trade, not shadow
+        # Never sync mid-position — real balance reflects live trade, not shadow.
+        # Ez tudatos modell (lásd U-0.4 audit), ezért NEM számít hibának.
+        return {"attempted": False, "ok": False, "source": "skipped_in_position"}
 
     amount, source = fetch_shadow_equity_from_live(state)
 
@@ -344,16 +358,20 @@ def _shadow_sync_equity_if_flat(state: dict, shadow: dict) -> None:
         shadow["equity_last_sync_source"] = source
         shadow["equity_last_sync_value"] = amount
         shadow["equity_sync_failures"] = 0
+        shadow["equity_sync_ok_last_tick"] = True
 
         if shadow.get("equity_seed_usdc") is None:
             shadow["equity_seed_usdc"] = amount
             shadow["equity_seed_source"] = source
             shadow["equity_seed_ts"] = int(time.time())
-    else:
-        shadow["equity_sync_failures"] = int(shadow.get("equity_sync_failures") or 0) + 1
-        _shadow_log(
-            f"SHADOW_BALANCE_READ_FAIL consecutive_failures={shadow['equity_sync_failures']} source={source}"
-        )
+        return {"attempted": True, "ok": True, "source": source}
+
+    shadow["equity_sync_failures"] = int(shadow.get("equity_sync_failures") or 0) + 1
+    shadow["equity_sync_ok_last_tick"] = False
+    _shadow_log(
+        f"SHADOW_BALANCE_READ_FAIL consecutive_failures={shadow['equity_sync_failures']} source={source}"
+    )
+    return {"attempted": True, "ok": False, "source": source}
 
 
 # ---------------------------------------------------------------------------
@@ -982,7 +1000,7 @@ def maybe_run_shadow_tick(state: dict) -> None:
     slippage_pct = _env_float("SLIPPAGE_PCT", 0.0) / 100.0
 
     # 1. Sync equity (only when flat; deferred mid-position)
-    _shadow_sync_equity_if_flat(state, shadow)
+    sync_result = _shadow_sync_equity_if_flat(state, shadow)
 
     # 2. Defer first-time init if equity not yet available
     if shadow.get("equity_usdc") is None:
@@ -1037,7 +1055,19 @@ def maybe_run_shadow_tick(state: dict) -> None:
     # 10. Execute shadow trade
     if act == "BUY" and not in_pos:
         equity = _sf(shadow.get("equity_usdc"))
-        if equity is None or equity <= 0:
+        if not sync_result.get("ok"):
+            # U-0.4 (9.1): FAIL-CLOSED. Flat állapotban ÚJ shadow pozíció csak
+            # akkor nyitható, ha a jelenlegi tick szinkronja érvényes equity-
+            # forrást adott. A perzisztált (esetleg hónapokkal régi) equity
+            # önmagában nem elég – ez nyitotta a nem-horgonyzott pozíciót.
+            # Nem a nyers hibaszámláló a kapu, hanem a MOSTANI sync eredménye,
+            # így egy történeti számlálóérték nem okoz állandó lockot.
+            _shadow_log(
+                f"SHADOW_BUY_BLOCKED_STALE_EQUITY source={sync_result.get('source')} "
+                f"persisted_equity_usdc={equity} "
+                f"consecutive_failures={shadow.get('equity_sync_failures')}"
+            )
+        elif equity is None or equity <= 0:
             _shadow_log(f"SHADOW_BUY_DEFERRED equity_usdc={equity}")
         else:
             entry_price_snapshot = last

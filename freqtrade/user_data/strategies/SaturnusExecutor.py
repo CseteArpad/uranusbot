@@ -2,12 +2,79 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict
 
 from freqtrade.strategy import IStrategy
 from pandas import DataFrame
+
+logger = logging.getLogger(__name__)
+
+
+# --- U-0.4: signal freshness -------------------------------------------------
+# A strategy egyetlen bemenete a state.json-ból érkező jel. Ha az elavult vagy
+# időbélyeg nélküli, a belépés FAIL-CLOSED módon elmarad: egy régi, ottfelejtett
+# BUY jel újraindítás után nem indíthat valódi vételt.
+# Szándékosan EGYETLEN, jól definiált paraméter; nem a state `updated_utc`-jét
+# használjuk signal-frissességre, mert az a runner tick ideje, nem a jelé.
+def signal_max_age_sec() -> float:
+    try:
+        return float(os.getenv("SIGNAL_MAX_AGE_SEC", "300"))
+    except (TypeError, ValueError):
+        return 300.0
+
+
+def parse_signal_ts(value: Any) -> float | None:
+    """
+    Toleráns jel-időbélyeg értelmezés -> epoch másodperc.
+
+    Elfogad epoch számot (másodperc vagy ezredmásodperc, stringként is) és
+    ISO-8601 alakot ('Z', offset, vagy naiv = UTC). Bármi más -> None.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+
+    if isinstance(value, (int, float)):
+        num = float(value)
+        if num <= 0:
+            return None
+        return num / 1000.0 if num >= 1e11 else num
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return parse_signal_ts(float(text))
+        except ValueError:
+            pass
+        try:
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+
+    return None
+
+
+def signal_is_fresh(ts_value: Any, now: float | None = None,
+                    max_age: float | None = None) -> tuple[bool, str]:
+    """
+    (friss?, ok) – fail-closed: hiányzó vagy értelmezhetetlen időbélyeg NEM friss.
+    """
+    limit = signal_max_age_sec() if max_age is None else float(max_age)
+    parsed = parse_signal_ts(ts_value)
+    if parsed is None:
+        return False, "SIGNAL_TS_MISSING_OR_INVALID"
+    current = datetime.now(timezone.utc).timestamp() if now is None else float(now)
+    age = current - parsed
+    if age > limit:
+        return False, f"SIGNAL_STALE age={int(age)}s max={int(limit)}s"
+    return True, "OK"
 
 
 class UranusExecutor(IStrategy):
@@ -124,7 +191,21 @@ class UranusExecutor(IStrategy):
         state = self._load_json(self.STATE_JSON_PATH)
         sig = self._get_pair_signal(state, pair)
 
-        if sig["action"] == "BUY" and not self._already_processed(pair, sig["id"], "BUY"):
+        if sig["action"] != "BUY":
+            return dataframe
+
+        # U-0.4: a jel frissessége az egyetlen új feltétel. A one-shot szerződés
+        # (id alapú duplikáció-védelem) változatlan.
+        fresh, fresh_reason = signal_is_fresh(sig["ts"])
+        if not fresh:
+            # FAIL-CLOSED: nem jelöljük feldolgozottnak, hogy egy későbbi,
+            # friss jel ugyanazzal az id-vel még végrehajtható maradjon.
+            logger.warning(
+                "URANUS SIGNAL NOT FRESH -> NO ENTRY (pair=%s reason=%s)", pair, fresh_reason
+            )
+            return dataframe
+
+        if not self._already_processed(pair, sig["id"], "BUY"):
             # Egyetlen jel = egy végrehajtás (one-shot)
             dataframe.loc[dataframe.index[-1], "enter_long"] = 1
             self._mark_processed(pair, sig["id"], "BUY")

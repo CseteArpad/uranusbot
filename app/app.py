@@ -407,9 +407,13 @@ def ensure_state_schema(state: dict) -> dict:
             state["start_last"] = last
             changed = True
 
-    if not state.get("updated_utc"):
-        state["updated_utc"] = state.get("updated_at_utc") or utc_now_iso()
-        changed = True
+    # U-0.4 (8.3): innen ELTÁVOLÍTVA a korábbi write-once `updated_utc` backfill.
+    # Az a guard (`if not state.get("updated_utc")`) egyszer beírta a UI saját
+    # idejét, majd soha többé nem frissítette – így a mező hónapokra befagyott,
+    # miközben a runner egy másik nevű mezőt írt. Az olvasási útvonal (UI/API)
+    # nem lehet a freshness-timestamp kanonikus írója; a kanonikus írás a
+    # runnerben történik (runtime_freshness.stamp_tick_timestamps).
+    # A legacy megjelenítési fallback a view-ban van, állapotírás nélkül.
 
     if changed:
         atomic_write_json(STATE_PATH, state)
@@ -441,6 +445,12 @@ def load_state_view() -> dict:
 
     view = dict(state)
     view["pair"] = resolve_pair(state)
+
+    # U-0.4 (8.3/8.4): megjelenítési fallback, NEM állapotírás. Régi state-ben
+    # hiányozhat az `updated_utc`; ilyenkor a runner által írt `updated_at`
+    # aliast mutatjuk, hogy az X-Updated-Utc header se adjon hamis értéket.
+    if not view.get("updated_utc"):
+        view["updated_utc"] = state.get("updated_at") or state.get("time")
 
     if not isinstance(view.get("freqtrade"), dict):
         view["freqtrade"] = view_freqtrade

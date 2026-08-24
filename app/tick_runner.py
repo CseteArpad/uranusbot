@@ -20,6 +20,9 @@ from datetime import datetime, timezone
 from typing import Any, Tuple
 from urllib.request import Request, urlopen
 
+# U-0.4: startup execution gate + kanonikus tick-időbélyeg.
+import runtime_freshness
+
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -324,11 +327,21 @@ def update_state_from_candles(state: dict, pair: str, timeframe: str, candles: l
 
     market["pair"] = pair
     market["timeframe"] = timeframe
+
+    # U-0.4 (8.2): a market blokk a PIACI adat frissülésének idejét hordozza.
+    # A tick-szintű kanonikus időbélyegzés a sikeres tick végén történik
+    # (runtime_freshness.stamp_tick_timestamps), hogy egyetlen `now` értékből
+    # származzon minden mező, és hibaágon ne hazudjon frissességet.
     market["updated_at"] = now_utc_iso()
 
-    state["updated_at"] = market["updated_at"]
-    state["time"] = state["updated_at"]
-    state["tick_ts"] = int(time.time())
+    # U-0.4 (7.1): a friss piaci adat bizonyítéka a JELENLEGI processzben.
+    # Enélkül a startup execution gate zárva marad.
+    if last_close is not None:
+        runtime_freshness.mark_market_fetch_ok(
+            market.get("last_candle_time", market.get("ts")), timeframe
+        )
+    else:
+        runtime_freshness.mark_market_fetch_failed()
 
     return state, prev_close, last_close
 
@@ -569,6 +582,66 @@ def sync_position_from_freqtrade(state: dict, pair: str) -> None:
 
     except Exception:
         return
+
+
+def reconcile_startup_anchor(state: dict, last: float | None) -> None:
+    """
+    U-0.4 (7.3): egyszeri, processzenkénti állapot-újrahorgonyzás indulás után.
+
+    A perzisztált ``base`` egy *kereskedési ciklushoz* tartozó horgony. Újra-
+    indítás után, ha a Freqtrade szerint nincs nyitott pozíció, ez a horgony
+    hónapokkal korábbi lehet, és vakon nem használható új BUY döntéshez – ez
+    okozta az azonnali ``BUY_CATASTROPHE``-t (``base * 1.10`` küszöb).
+
+    Két eset, szándékosan eltérően kezelve:
+
+    * **Nyitott LIVE pozíció** – a horgonyt és a cycle/recovery kontextust
+      MEGŐRIZZÜK. A ``base`` amúgy is a Freqtrade ``open_rate``-ből frissül
+      minden tickben (``sync_position_from_freqtrade``), és a recovery/panic
+      folyamat a nyitott ügylethez tartozik.
+    * **LIVE flat** – a flat horgonyt az aktuális árra állítjuk, pontosan úgy,
+      ahogy a meglévő nyitott→flat átmenet is teszi. A cycle/panic kontextust
+      itt sem töröljük; a döntés-oldali védelmet a startup execution gate adja.
+
+    Amíg ez le nem futott, a ``runtime_freshness`` gate tiltja a végrehajtást.
+    """
+    if runtime_freshness.is_reconciled():
+        return
+
+    in_position = bool(state.get("in_position", False))
+
+    if in_position:
+        state["startup_reconcile"] = {
+            "ts": int(time.time()),
+            "mode": "in_position_preserved",
+            "base": _as_float(state.get("base")),
+        }
+        runtime_freshness.mark_reconciled()
+        log("STARTUP_RECONCILE mode=in_position_preserved (anchor from Freqtrade open_rate)")
+        return
+
+    if last is None:
+        # Nincs használható friss ár -> nem horgonyzunk, a gate zárva marad.
+        return
+
+    old_base = _as_float(state.get("base"))
+    if old_base is not None:
+        state["previous_base"] = old_base
+
+    state["base"] = last
+    state["base_price"] = last
+    state["_flat_anchor"] = last
+    state["trough"] = last
+    state["low"] = last
+
+    state["startup_reconcile"] = {
+        "ts": int(time.time()),
+        "mode": "flat_reanchored",
+        "previous_base": old_base,
+        "base": last,
+    }
+    runtime_freshness.mark_reconciled()
+    log(f"STARTUP_RECONCILE mode=flat_reanchored previous_base={old_base} new_base={last}")
 
 
 def update_peak_trough(state: dict, market: dict) -> None:
@@ -1526,6 +1599,23 @@ def maybe_execute_via_api(state: dict, decision: dict) -> Tuple[dict, bool]:
         log(f"EXEC_DISABLED: act={act} rule={decision.get('rule')} reason={decision.get('reason')}")
         return decision, executed
 
+    # U-0.4 (7.4): hard freshness gate KÖZVETLENÜL a végrehajtás előtt.
+    # Döntés keletkezhet, de order nem mehet ki, amíg a jelenlegi processz nem
+    # bizonyított friss piaci adatot ÉS nem horgonyozta újra az állapotot.
+    fresh_ok, fresh_reason = runtime_freshness.execution_gate_status()
+    execs["freshness_gate"] = runtime_freshness.gate_snapshot()
+    if not fresh_ok:
+        execs["last_result"] = {
+            "ts": int(time.time()),
+            "ok": False,
+            "detail": f"freshness_block:{fresh_reason}",
+        }
+        log(
+            f"EXEC_FRESHNESS_BLOCK: act={act} rule={decision.get('rule')} "
+            f"reason={decision.get('reason')} block={fresh_reason}"
+        )
+        return decision, executed
+
     if not guard_ok:
         execs["last_result"] = {"ts": int(time.time()), "ok": False, "detail": f"guardrail_block:{guard_reason}"}
         log(f"EXEC_GUARDRAIL_BLOCK: act={act} rule={decision.get('rule')} reason={decision.get('reason')} block={guard_reason}")
@@ -1617,6 +1707,11 @@ def run_once() -> tuple[bool, float | None, dict]:
         candles = fetch_candles(pair, timeframe, limit=effective_limit)
         state, _prev_close, last_close = update_state_from_candles(state, pair, timeframe, candles)
 
+        # U-0.4: a perzisztált ciklus-horgony újraértékelése MIELŐTT az
+        # árszintek kiszámolódnának – különben egy hónapokkal régi `base`
+        # azonnali CATASTROPHE döntést szülne.
+        reconcile_startup_anchor(state, last_close)
+
         market = state.get("market") if isinstance(state.get("market"), dict) else {}
         update_peak_trough(state, market)
         ensure_levels(state)
@@ -1638,10 +1733,15 @@ def run_once() -> tuple[bool, float | None, dict]:
 
         execs = _ensure_exec_section(state)
         execs["ft_url"] = FT_URL
+        execs["freshness_gate"] = runtime_freshness.gate_snapshot()
 
         if _runtime_shadow_enabled():
             from shadow_position import maybe_run_shadow_tick
             maybe_run_shadow_tick(state)
+
+        # U-0.4 (8.1): kanonikus időbélyegzés a SIKERES tick végén, egyetlen
+        # `now` értékből. Hibaágon szándékosan nem fut le.
+        runtime_freshness.stamp_tick_timestamps(state)
 
         _write_state(state)
         return True, last_close, decision
@@ -1657,11 +1757,15 @@ def run_once() -> tuple[bool, float | None, dict]:
         )
         apply_decision_contract(state, decision)
 
-        state["time"] = now_utc_iso()
-        state["updated_at"] = state["time"]
+        # U-0.4 (8.1): hibaágon a frissesség-időbélyeget NEM frissítjük –
+        # különben a state "frissnek" hazudná magát egy sikertelen tick után.
+        # A hiba ideje külön mezőbe kerül, és a gate fail-closed módon zár.
+        state["last_error_at"] = now_utc_iso()
+        runtime_freshness.mark_market_fetch_failed()
 
         execs = _ensure_exec_section(state)
         execs["ft_url"] = FT_URL
+        execs["freshness_gate"] = runtime_freshness.gate_snapshot()
         execs["last_result"] = {
             "ts": int(time.time()),
             "ok": False,
