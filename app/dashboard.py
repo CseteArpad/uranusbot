@@ -8,9 +8,20 @@ def _api_base():
     base = os.environ.get("FREQTRADE_RPC_URL", "http://127.0.0.1:8090").rstrip("/")
     return base + "/api/v1"
 
+class DashboardConfigError(RuntimeError):
+    """Hiányzó kötelező konfiguráció – fail-closed, nincs beégetett fallback."""
+
+
 def _auth_header():
-    user = os.environ.get("FREQTRADE_RPC_USERNAME", "deploy")
-    pw   = os.environ.get("FREQTRADE_RPC_PASSWORD", "Vadallat18")
+    # U-0.1 (U0-SEC-002): a credential kizárólag környezeti változóból jöhet.
+    # Beégetett alapértelmezés nincs; hiány esetén a hívás elbukik.
+    user = os.environ.get("FREQTRADE_RPC_USERNAME", "")
+    pw = os.environ.get("FREQTRADE_RPC_PASSWORD", "")
+    if not user or not pw:
+        raise DashboardConfigError(
+            "FREQTRADE_RPC_USERNAME / FREQTRADE_RPC_PASSWORD nincs beállítva "
+            "(kötelező, alapértelmezett érték nincs)"
+        )
     token = base64.b64encode(f"{user}:{pw}".encode()).decode()
     return "Basic " + token
 

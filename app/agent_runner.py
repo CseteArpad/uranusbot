@@ -7,8 +7,23 @@ STATE_PATH = os.getenv("URANUS_STATE_PATH", "/opt/bots/uranus/state.json")
 LOG_PATH   = os.getenv("URANUS_AGENT_LOG", "/opt/bots/uranus/logs/agent.log")
 
 FT_URL     = os.getenv("URANUS_FT_URL", "http://127.0.0.1:8090")
-FT_USER    = os.getenv("URANUS_FT_USER", "uranus")
-FT_PASS    = os.getenv("URANUS_FT_PASS", "uranus")
+
+# U-0.1 (U0-SEC-002): nincs beégetett credential-alapértelmezés.
+# Hiányzó érték esetén a runner fail-closed módon leáll (lásd _require_credentials).
+FT_USER    = os.getenv("URANUS_FT_USER", "")
+FT_PASS    = os.getenv("URANUS_FT_PASS", "")
+
+
+class MissingCredentialError(RuntimeError):
+    """Kötelező credential hiányzik – fail-closed."""
+
+
+def _require_credentials():
+    if not FT_USER or not FT_PASS:
+        raise MissingCredentialError(
+            "URANUS_FT_USER / URANUS_FT_PASS nincs beállítva "
+            "(kötelező, alapértelmezett érték nincs)"
+        )
 
 TICK_SEC   = int(os.getenv("URANUS_TICK_INTERVAL", "10"))
 
@@ -41,6 +56,7 @@ def write_state(s):
     os.replace(tmp, STATE_PATH)
 
 def http_json(url: str):
+    _require_credentials()
     req = Request(url, method="GET")
     import base64
     token = base64.b64encode(f"{FT_USER}:{FT_PASS}".encode("utf-8")).decode("ascii")
@@ -59,6 +75,14 @@ def ft_health():
     return False, None, None
 
 def main():
+    # Fail-closed indulás: hiányzó credential mellett el sem indulunk, hogy a
+    # hiba egyértelmű legyen és ne gyenge auth-tal próbálkozzunk körben.
+    try:
+        _require_credentials()
+    except MissingCredentialError as e:
+        log(f"FATAL config: {e}")
+        raise SystemExit(2)
+
     log("agent_runner start")
     while True:
         try:

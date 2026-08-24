@@ -383,7 +383,10 @@ async function saveLabRules(){
 
   await fetch("/api/lab-rules", {
     method:"POST",
-    headers:{"Content-Type":"application/json"},
+    headers:{
+      "Content-Type":"application/json",
+      "X-CSRF-Token": (window.URANUS_CSRF || "")
+    },
     body:JSON.stringify(labRules)
   });
 
@@ -479,7 +482,10 @@ async function saveCanonicalRules(){
 
     const res = await fetch("/api/rules", {
       method: "POST",
-      headers: {"Content-Type":"application/json"},
+      headers: {
+        "Content-Type":"application/json",
+        "X-CSRF-Token": (window.URANUS_CSRF || "")
+      },
       body: JSON.stringify(canonicalRules)
     });
 

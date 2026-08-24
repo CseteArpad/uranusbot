@@ -4,28 +4,34 @@ set -u
 cd /opt/bots/uranus/freqtrade/user_data || { echo "HIBA: nincs user_data"; exit 2; }
 
 FT_URL="${FT_URL:-http://127.0.0.1:8089}"
-FT_USER="${FT_USER:-Freqtrader}"
-FT_PASS="${FT_PASS:-SuperSecret1!}"
+
+# U-0.1 (U0-SEC-002): nincs beegetett credential-alapertelmezes.
+# Hianyzo vagy ures ertek eseten a szkript azonnal leall (fail-closed).
+: "${FT_USER:?FT_USER kornyezeti valtozo kotelezo (nincs alapertelmezes)}"
+: "${FT_PASS:?FT_PASS kornyezeti valtozo kotelezo (nincs alapertelmezes)}"
 
 echo "FT_URL=$FT_URL"
-echo "FT_USER=$FT_USER"
 
 echo "== ping =="
 curl -sS "$FT_URL/api/v1/ping" ; echo
 
+# A token valasz csak a futtato user szamara olvashato ideiglenes fajlba kerul,
+# es a szkript vegen torlodik. A body-t NEM irjuk ki, mert JWT-t tartalmaz.
+umask 077
+TOKEN_FILE="$(mktemp "${TMPDIR:-/tmp}/ft_token.XXXXXXXX.json")"
+trap 'rm -f "$TOKEN_FILE"' EXIT
+
 echo "== token/login (Basic + body) =="
-HTTP_CODE="$(curl -sS -u "$FT_USER:$FT_PASS" -o /tmp/ft_token.json -w "%{http_code}" -X POST "$FT_URL/api/v1/token/login" \
+HTTP_CODE="$(curl -sS -u "$FT_USER:$FT_PASS" -o "$TOKEN_FILE" -w "%{http_code}" -X POST "$FT_URL/api/v1/token/login" \
   -H "Content-Type: application/json" \
   -d "{\"username\":\"$FT_USER\",\"password\":\"$FT_PASS\"}")"
 
 echo "HTTP_CODE=$HTTP_CODE"
-echo "--- BODY ---"
-cat /tmp/ft_token.json ; echo
-echo "-----------"
+echo "BODY: [redacted - token response]"
 
-FT_ACCESS="$(python3 - <<'PY'
-import json,sys
-p="/tmp/ft_token.json"
+FT_ACCESS="$(TOKEN_FILE="$TOKEN_FILE" python3 - <<'PY'
+import json,os,sys
+p=os.environ["TOKEN_FILE"]
 try:
     d=json.load(open(p))
 except Exception:
@@ -38,7 +44,7 @@ PY
 echo "ACCESS_LEN=${#FT_ACCESS}"
 
 if [ "${#FT_ACCESS}" -lt 50 ]; then
-  echo "HIBA: nincs token. (HTTP_CODE és BODY fent)"
+  echo "HIBA: nincs token. (lasd a HTTP_CODE erteket fent)"
   exit 3
 fi
 

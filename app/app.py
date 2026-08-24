@@ -18,6 +18,15 @@ from rules_loader import (
 )
 from rules_merge import build_effective_rules
 
+# U-0.1 biztonsági patch: bemenet-validáció (U0-SEC-001) és központi
+# authentikáció/CSRF (U0-SEC-003/004/005).
+import web_security
+from settings_validation import (
+    SettingsValidationError,
+    assert_dropin_safe,
+    validate_settings_payload,
+)
+
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.abspath(os.path.join(APP_DIR, ".."))
@@ -165,6 +174,10 @@ def env_int(name, default=0):
     except:
         return int(default)
 app = Flask(__name__, template_folder=os.path.join(APP_DIR, "templates"))
+
+# U-0.1: minden state-changing kérés központi védelem alá kerül.
+# A GET/HEAD olvasási út változatlanul nyitva marad.
+web_security.install_security(app)
 
 
 def utc_now_iso() -> str:
@@ -1003,7 +1016,14 @@ def read_trading_settings():
     return cfg
 
 
-def write_trading_settings(data):
+def build_settings_dropin(data) -> str:
+    """
+    A systemd drop-in szövegének előállítása (tiszta függvény, nincs I/O).
+
+    A visszaadott szöveg átment az ``assert_dropin_safe`` strukturális
+    ellenőrzésen: minden sora vagy üres, vagy ``[Service]``, vagy egy
+    engedélyezett ``Environment=KULCS=ERTEK`` sor.
+    """
     tpl = f"""[Service]
 
 Environment=TICK_SECONDS={data['tick_seconds']}
@@ -1045,11 +1065,72 @@ Environment=SHADOW_ENABLED={bool_to_env(data.get('shadow_enabled', False))}
 Environment=SHADOW_START_EQUITY_USDC={float(data.get('shadow_start_equity_usdc', 0.0))}
 """
 
-    with open(SETTINGS_ENV_FILE, "w", encoding="utf-8") as f:
-        f.write(tpl)
+    return assert_dropin_safe(tpl)
 
-    subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "daemon-reload"], check=True)
-    subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "uranus-runner.service"], check=True)
+
+def _atomic_write_text(path: str, text: str) -> None:
+    """Atomikus fájlírás: félbeszakadás esetén sem marad csonka drop-in."""
+    dirn = os.path.dirname(path) or "."
+    base = os.path.basename(path)
+    fd, tmp_path = tempfile.mkstemp(prefix=base + ".", suffix=".tmp", dir=dirn)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp_path, 0o644)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def apply_settings_dropin(text: str) -> None:
+    """
+    A drop-in élesítése: ellenőrzés -> atomikus írás -> daemon-reload -> restart.
+
+    Ha a ``daemon-reload`` vagy a ``restart`` hibázik, a korábbi tartalmat
+    visszaállítjuk, hogy soha ne maradjon félig alkalmazott konfiguráció.
+    A hiba nem nyelődik el: a hívó 500-as választ ad, nincs csendes siker.
+    """
+    assert_dropin_safe(text)
+
+    existed = os.path.exists(SETTINGS_ENV_FILE)
+    previous = None
+    if existed:
+        try:
+            with open(SETTINGS_ENV_FILE, "r", encoding="utf-8") as f:
+                previous = f.read()
+        except OSError:
+            previous = None
+
+    _atomic_write_text(SETTINGS_ENV_FILE, text)
+
+    try:
+        subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "daemon-reload"], check=True)
+        subprocess.run(
+            ["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "uranus-runner.service"],
+            check=True,
+        )
+    except Exception:
+        try:
+            if previous is not None:
+                _atomic_write_text(SETTINGS_ENV_FILE, previous)
+            elif not existed:
+                os.unlink(SETTINGS_ENV_FILE)
+            subprocess.run(
+                ["/usr/bin/sudo", "/usr/bin/systemctl", "daemon-reload"], check=False
+            )
+        except Exception:
+            pass
+        raise
+
+
+def write_trading_settings(data):
+    apply_settings_dropin(build_settings_dropin(data))
 
 
 
@@ -1341,8 +1422,15 @@ def api_save_settings():
         if cleaned["ma_sideways_band_pct"] < 0:
             raise ValueError("Az MA_SIDEWAYS_BAND_PCT nem lehet negatív.")
 
+        # U-0.1 (U0-SEC-001): fail-closed bemenet-validáció. Érvénytelen input
+        # esetén innen SettingsValidationError száll, tehát nincs fájlírás,
+        # nincs daemon-reload és nincs service restart.
+        cleaned = validate_settings_payload(cleaned)
+
         write_trading_settings(cleaned)
         return jsonify({"ok": True})
+    except SettingsValidationError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 

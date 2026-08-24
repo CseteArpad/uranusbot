@@ -3,6 +3,14 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  {# U-0.1: sessionhoz kotott CSRF-token. Ures, ha nincs bejelentkezett session. #}
+  <meta name="csrf-token" content="{{ csrf_token }}"/>
+  <script>
+    // A tokent a meta tagbol olvassuk, hogy a JS-be soha ne kelljen
+    // szerveroldalon stringet interpolalni.
+    window.URANUS_CSRF =
+      (document.querySelector('meta[name="csrf-token"]') || {}).content || "";
+  </script>
   <title>{% block title %}Uranus Bot{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   <style>

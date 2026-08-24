@@ -14,6 +14,10 @@ from health_bp import health_bp
 from state_schema import ensure_state, validate_state
 from ft_jwt_client import FreqtradeJWTClient
 
+# U-0.1: ugyanaz a központi védelem, mint az app.py-ban. Ez a legacy UI is
+# tartalmaz authentikáció nélküli /ui/control végpontot (U0-SEC-003).
+import web_security
+
 
 STATE_PATH = Path("/opt/bots/uranus/state.json")
 TZ_DEFAULT = "Europe/Budapest"
@@ -228,6 +232,9 @@ def build_payload(exchange: str) -> dict:
 def create_app() -> Flask:
     app = Flask(__name__)
     app.register_blueprint(health_bp)
+
+    # Minden state-changing kérés központi authentikáció + CSRF mögé kerül.
+    web_security.install_security(app)
 
     @app.get("/")
     def index():

@@ -908,7 +908,10 @@ button.exchange-svcbtn.stop{ border-color:rgba(255,107,107,.4); }
 
       const r = await fetch(`/ui/control/${target}/${action}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" }
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": (window.URANUS_CSRF || "")
+        }
       });
 
       let payload = {};

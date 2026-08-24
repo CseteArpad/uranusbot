@@ -512,7 +512,10 @@ async function saveSettings(){
   try{
     const res = await fetch("/api/settings", {
       method: "POST",
-      headers: {"Content-Type": "application/json"},
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": (window.URANUS_CSRF || "")
+      },
       body: JSON.stringify(payload)
     });
 
