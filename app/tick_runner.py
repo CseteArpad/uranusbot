@@ -28,6 +28,10 @@ import runtime_freshness
 # hogy a runner és a UI ne tudjon szétcsúszni ezekben.
 import execution_policy
 
+# U-3: háromértékű pozíció-authority (FLAT / OPEN / UNKNOWN). A Freqtrade
+# kommunikációs hibája soha nem jelenthet FLAT-et.
+import position_authority
+
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -588,7 +592,9 @@ def sync_position_from_freqtrade(state: dict, pair: str) -> None:
         return
 
 
-def reconcile_startup_anchor(state: dict, last: float | None) -> None:
+def reconcile_startup_anchor(
+    state: dict, last: float | None, authority_state: str | None = None
+) -> None:
     """
     U-0.4 (7.3): egyszeri, processzenkénti állapot-újrahorgonyzás indulás után.
 
@@ -612,7 +618,24 @@ def reconcile_startup_anchor(state: dict, last: float | None) -> None:
     if runtime_freshness.is_reconciled():
         return
 
-    in_position = bool(state.get("in_position", False))
+    # U-3: az UNKNOWN pozícióállapot NEM horgonyoz újra és NEM jelöl
+    # reconciled-nek. Korábban ez a függvény a (hibás esetben hamis) legacy
+    # booleant olvasta, és mindkét ágán `mark_reconciled()`-et hívott – így egy
+    # meghiúsult pozíció-lekérdezés a flat-ágra vitte a horgonyt ÉS kinyitotta a
+    # U-0.4 execution gate-et egy bizonyítatlan állapot mellett.
+    if authority_state == position_authority.STATE_UNKNOWN:
+        state["startup_reconcile"] = {
+            "ts": int(time.time()),
+            "mode": "blocked_authority_unknown",
+            "base": _as_float(state.get("base")),
+        }
+        log("STARTUP_RECONCILE mode=blocked_authority_unknown (no reanchor, gate stays closed)")
+        return
+
+    if authority_state in (position_authority.STATE_OPEN, position_authority.STATE_FLAT):
+        in_position = authority_state == position_authority.STATE_OPEN
+    else:
+        in_position = bool(state.get("in_position", False))
 
     if in_position:
         state["startup_reconcile"] = {
@@ -1620,6 +1643,28 @@ def maybe_execute_via_api(state: dict, decision: dict) -> Tuple[dict, bool]:
         )
         return decision, executed
 
+    # U-3: Position Authority hard gate. BUY csak bizonyított FLAT-ben, SELL
+    # csak bizonyított OPEN-ben; UNKNOWN alatt egyik sem. Csak `live` módban
+    # blokkol – `off`/`shadow` alatt nincs olyan verdikt, amire támaszkodhatnánk.
+    if position_authority.get_mode() == "live":
+        pos_ok, pos_reason = position_authority.execution_allowed(state, act)
+        execs["position_authority"] = {
+            "state": position_authority.authority_state(state),
+            "trade_id": position_authority.authority_trade_id(state),
+            "gate": pos_reason,
+        }
+        if not pos_ok:
+            execs["last_result"] = {
+                "ts": int(time.time()),
+                "ok": False,
+                "detail": f"position_block:{pos_reason}",
+            }
+            log(
+                f"EXEC_POSITION_BLOCK: act={act} rule={decision.get('rule')} "
+                f"reason={decision.get('reason')} block={pos_reason}"
+            )
+            return decision, executed
+
     if not guard_ok:
         execs["last_result"] = {"ts": int(time.time()), "ok": False, "detail": f"guardrail_block:{guard_reason}"}
         log(f"EXEC_GUARDRAIL_BLOCK: act={act} rule={decision.get('rule')} reason={decision.get('reason')} block={guard_reason}")
@@ -1705,7 +1750,24 @@ def run_once() -> tuple[bool, float | None, dict]:
         market0 = state.get("market") if isinstance(state.get("market"), dict) else {}
         last_close = _as_float(market0.get("last", state.get("last")))
 
-        sync_position_from_freqtrade(state, pair)
+        # U-3: a pozícióállapot forrása módfüggő.
+        #   off    -> a legacy sync (változatlan viselkedés)
+        #   shadow -> legacy sync + megfigyelő authority (state["position"] only)
+        #   live   -> KIZÁRÓLAG az authority; a legacy sync nem fut (egy író)
+        pa_mode = position_authority.get_mode()
+        authority_state_now: str | None = None
+        if pa_mode == "live":
+            snapshot = position_authority.authority_tick(state, pair, mode="live")
+            authority_state_now = (
+                snapshot.authority_state if snapshot is not None
+                else position_authority.STATE_UNKNOWN
+            )
+        else:
+            sync_position_from_freqtrade(state, pair)
+            if pa_mode == "shadow":
+                position_authority.authority_tick(state, pair, mode="shadow")
+
+        position_frozen = authority_state_now == position_authority.STATE_UNKNOWN
 
         effective_limit = max(int(limit), int(MA_LONG_PERIOD))
         candles = fetch_candles(pair, timeframe, limit=effective_limit)
@@ -1714,13 +1776,19 @@ def run_once() -> tuple[bool, float | None, dict]:
         # U-0.4: a perzisztált ciklus-horgony újraértékelése MIELŐTT az
         # árszintek kiszámolódnának – különben egy hónapokkal régi `base`
         # azonnali CATASTROPHE döntést szülne.
-        reconcile_startup_anchor(state, last_close)
+        reconcile_startup_anchor(state, last_close, authority_state_now)
 
         market = state.get("market") if isinstance(state.get("market"), dict) else {}
-        update_peak_trough(state, market)
-        ensure_levels(state)
-        update_recovery_state(state)
-        _mirror_cycle_to_state(state)
+        if position_frozen:
+            # U-3: UNKNOWN alatt a POZÍCIÓFÜGGŐ állapot fagyasztva. A piaci
+            # mezők (market.*, last, close/open/high/low, volume, MA) az előző
+            # lépésben már frissültek – azok forrása a gyertya, nem a pozíció.
+            log("POSITION_FROZEN: authority_state=UNKNOWN -> peak/trough/levels/cycle unchanged")
+        else:
+            update_peak_trough(state, market)
+            ensure_levels(state)
+            update_recovery_state(state)
+            _mirror_cycle_to_state(state)
 
         state["fee_buy_pct"] = FEE_PCT / 100.0
         state["fee_sell_pct"] = FEE_PCT / 100.0
