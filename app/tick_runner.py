@@ -23,6 +23,11 @@ from urllib.request import Request, urlopen
 # U-0.4: startup execution gate + kanonikus tick-időbélyeg.
 import runtime_freshness
 
+# U-2B: a végrehajtási flagek kanonikus alapértelmezései. Az értékek azonosak
+# az eddigiekkel (enabled=False, log_only=True, confirm=True); a modul célja,
+# hogy a runner és a UI ne tudjon szétcsúszni ezekben.
+import execution_policy
+
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -114,10 +119,9 @@ def _as_float(x) -> float | None:
 
 
 def _runtime_exec_flags() -> tuple[bool, bool, bool]:
-    enabled = _env_bool("EXECUTION_ENABLED", False)
-    log_only = _env_bool("EXECUTION_LOG_ONLY", True)
-    confirm = _env_bool("EXECUTION_CONFIRM", True)
-    return enabled, log_only, confirm
+    # U-2B: egyetlen forrás a kanonikus alapértelmezésekre. A viselkedés
+    # változatlan – ugyanaz a három érték, csak már nem két helyen definiálva.
+    return execution_policy.runtime_execution_flags()
 
 
 def _runtime_shadow_enabled() -> bool:

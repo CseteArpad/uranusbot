@@ -13,6 +13,15 @@ from pandas import DataFrame
 logger = logging.getLogger(__name__)
 
 
+# --- U-2B: ONE LIVE EXECUTION AUTHORITY --------------------------------------
+# A stratégia NEM generálhat önálló belépési jelet. Az éles belépés egyetlen
+# megengedett útja a kontrollált Uranus végrehajtási lánc (freshness gate ->
+# guardrail -> kill switch -> force_enter). Ez a kapcsoló szándékosan
+# MODUL-KONSTANS és nem env-vezérelt: a jel-alapú belépés nem kapcsolható
+# vissza konfigurációval, csak kódváltoztatással és külön review-val.
+SIGNAL_BASED_ENTRY_ENABLED = False
+
+
 # --- U-0.4: signal freshness -------------------------------------------------
 # A strategy egyetlen bemenete a state.json-ból érkező jel. Ha az elavult vagy
 # időbélyeg nélküli, a belépés FAIL-CLOSED módon elmarad: egy régi, ottfelejtett
@@ -79,10 +88,15 @@ def signal_is_fresh(ts_value: Any, now: float | None = None,
 
 class UranusExecutor(IStrategy):
     """
-    EXECUTOR ONLY STRATEGY
+    PASSZÍV EXECUTOR STRATEGY (U-2B óta)
+
     - Nem számol saját logikát, nem használ indikátorokat.
-    - A Uranus app által frissített state.json alapján ad belépési/kilépési jelet.
-    - Stoploss védőháló: -10%.
+    - **Nem ad belépési jelet** és **nem ad kilépési jelet.** Mindkét irány
+      kizárólag a kontrollált Uranus végrehajtási láncból, a Freqtrade
+      ``/api/v1/forceenter`` és ``/api/v1/forceexit`` végpontjain keresztül
+      keletkezhet – azokat a force-utakat ez a stratégia nem befolyásolja.
+    - Ami MEGMARAD a stratégia felelősségének: a Freqtrade-szintű stoploss
+      védőháló (-10%), ami a jel-oszlopoktól függetlenül működik.
     """
 
     # --- Freqtrade kötelező / alap paraméterek ---
@@ -184,31 +198,49 @@ class UranusExecutor(IStrategy):
     # ----------------- signals -----------------
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        """
+        U-2B: a stratégia SOHA nem generál belépési jelet.
+
+        Korábban ez a metódus a ``state.json``-ból olvasott ``BUY`` jelre maga
+        állított ``enter_long=1``-et. Az így keletkező order **megkerülte** a
+        teljes Uranus végrehajtási kapuláncot: ``EXECUTION_ENABLED``,
+        ``EXECUTION_LOG_ONLY``, a runtime freshness gate, a guardrailek és a
+        kill switch egyike sem érintette. Hogy ez a gyakorlatban nem sült el,
+        annak egyetlen oka volt: a jelet soha senki nem írta a state-be. Ez
+        hiányzó funkció, nem biztonsági kontroll.
+
+        Az éles belépés innentől KIZÁRÓLAG a kontrollált Uranus úton keletkezhet
+        (``tick_runner.maybe_execute_via_api`` -> ``FreqtradeExecutor.force_enter``
+        -> Freqtrade ``/api/v1/forceenter``). A force entry a Freqtrade-ben nem
+        a stratégia belépési jelén keresztül megy, ezért a runner szerződését ez
+        a változtatás nem érinti.
+        """
         pair = metadata.get("pair", "")
 
+        # Kanonikus kimenet: nincs stratégiai belépés, semmilyen bemenetre.
         dataframe["enter_long"] = 0
 
-        state = self._load_json(self.STATE_JSON_PATH)
-        sig = self._get_pair_signal(state, pair)
-
-        if sig["action"] != "BUY":
-            return dataframe
-
-        # U-0.4: a jel frissessége az egyetlen új feltétel. A one-shot szerződés
-        # (id alapú duplikáció-védelem) változatlan.
-        fresh, fresh_reason = signal_is_fresh(sig["ts"])
-        if not fresh:
-            # FAIL-CLOSED: nem jelöljük feldolgozottnak, hogy egy későbbi,
-            # friss jel ugyanazzal az id-vel még végrehajtható maradjon.
-            logger.warning(
-                "URANUS SIGNAL NOT FRESH -> NO ENTRY (pair=%s reason=%s)", pair, fresh_reason
+        if SIGNAL_BASED_ENTRY_ENABLED:  # pragma: no cover - konstans False
+            raise RuntimeError(
+                "SIGNAL_BASED_ENTRY_ENABLED=True: a jel-alapú belépés az U-2B "
+                "óta tiltott (ONE LIVE EXECUTION AUTHORITY)."
             )
-            return dataframe
 
-        if not self._already_processed(pair, sig["id"], "BUY"):
-            # Egyetlen jel = egy végrehajtás (one-shot)
-            dataframe.loc[dataframe.index[-1], "enter_long"] = 1
-            self._mark_processed(pair, sig["id"], "BUY")
+        # Bizonyítéknyom: ha valaha megjelenik egy jelíró, azt látni akarjuk.
+        # Az olvasás kizárólag naplózásra szolgál, semmilyen kimenetet nem
+        # befolyásol, és a feldolgozott-jelölést sem írja.
+        try:
+            state = self._load_json(self.STATE_JSON_PATH)
+            sig = self._get_pair_signal(state, pair)
+            if sig["action"] in ("BUY", "SELL"):
+                fresh, fresh_reason = signal_is_fresh(sig["ts"])
+                logger.warning(
+                    "URANUS SIGNAL IGNORED (U-2B strategy is entry-passive) "
+                    "pair=%s action=%s id=%s fresh=%s reason=%s",
+                    pair, sig["action"], sig["id"], fresh, fresh_reason,
+                )
+        except Exception as exc:  # a naplózás soha nem törhet meg egy tickel
+            logger.warning("URANUS SIGNAL AUDIT READ FAILED: %s", exc)
 
         return dataframe
 

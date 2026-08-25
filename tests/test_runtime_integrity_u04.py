@@ -762,26 +762,43 @@ def test_l_missing_or_invalid_signal_ts_blocks_entry(strategy_mod, tmp_path, bad
     assert int(out["enter_long"].iloc[-1]) == 0
 
 
-def test_m_fresh_signal_enters_once(strategy_mod, tmp_path, monkeypatch):
+def test_m_fresh_signal_never_enters_since_u2b(strategy_mod, tmp_path, monkeypatch):
     from datetime import datetime, timezone
 
     monkeypatch.setenv("SIGNAL_MAX_AGE_SEC", "300")
     now_iso = datetime.now(timezone.utc).isoformat()
     strat = _make_strategy(strategy_mod, tmp_path, _signal_state(now_iso))
 
+    # U-2B ÓTA MEGFORDÍTVA: a U-0.4-ben itt még `== 1` állt, mert a stratégia a
+    # friss jelre belépett. Az U-2A audit kimutatta, hogy ez az út a teljes
+    # Uranus végrehajtási kapuláncot megkerüli (EXECUTION_ENABLED, log-only,
+    # freshness gate, guardrail, kill switch), ezért az U-2B Patch D
+    # fail-closed módon megszüntette. A frissesség-logika tesztje megmaradt,
+    # csak már nem a belépési kimeneten keresztül (lásd `test_m4_*`).
     first = strat.populate_entry_trend(_df(), {"pair": "XRP/USDC"})
-    assert int(first["enter_long"].iloc[-1]) == 1
+    assert int(first["enter_long"].iloc[-1]) == 0
 
-    # One-shot szerződés: ugyanaz az id másodszor már nem lép be.
     second = strat.populate_entry_trend(_df(), {"pair": "XRP/USDC"})
     assert int(second["enter_long"].iloc[-1]) == 0
 
+    # A stratégia a jelet nem is jelöli feldolgozottnak többé.
+    assert not os.path.exists(strat.EXECUTOR_STATE_PATH)
 
-def test_m2_epoch_signal_ts_accepted(strategy_mod, tmp_path):
+
+def test_m2_epoch_signal_ts_is_parsed_but_never_enters(strategy_mod, tmp_path):
+    """
+    Az epoch-formátumú jel-időbélyeg értelmezése változatlanul működik –
+    de U-2B óta egyetlen jelformátum sem vezet belépéshez.
+    """
     import time as _t
-    strat = _make_strategy(strategy_mod, tmp_path, _signal_state(int(_t.time())))
+
+    now = int(_t.time())
+    assert strategy_mod.parse_signal_ts(now) == float(now)
+    assert strategy_mod.signal_is_fresh(now, max_age=300)[0] is True
+
+    strat = _make_strategy(strategy_mod, tmp_path, _signal_state(now))
     out = strat.populate_entry_trend(_df(), {"pair": "XRP/USDC"})
-    assert int(out["enter_long"].iloc[-1]) == 1
+    assert int(out["enter_long"].iloc[-1]) == 0
 
 
 def test_m3_exit_trend_still_generates_no_independent_sell(strategy_mod, tmp_path):

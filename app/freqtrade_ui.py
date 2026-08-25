@@ -7,8 +7,19 @@ from typing import Any, Dict, Optional, Tuple
 
 import requests
 
-FT_URL = os.getenv("FT_URL", "http://127.0.0.1:8090").rstrip("/")
+import ft_endpoint
+
+# U-2B: a Freqtrade-cím feloldása NEM importáláskor és NEM közvetlenül a
+# megosztott FT_URL env-ből történik. A production auditban (U-2A) ez a
+# modulszintű olvasás vitte be a Neptunus 8017-es portját az Uranus UI-ba.
+# A kanonikus feloldás: ft_endpoint.resolve() – lásd az ottani sorrendet.
 FT_CFG_PATH = os.getenv("URANUS_FT_CONFIG", "/opt/bots/uranus/freqtrade/user_data/config.json")
+
+
+def ft_base_url() -> str:
+    """A hívás pillanatában érvényes kanonikus Uranus Freqtrade alapcím."""
+    return ft_endpoint.canonical_ft_url()
+
 
 _TIMEOUT = 6
 _CACHE_TTL = 3.0
@@ -35,7 +46,7 @@ def _read_creds() -> Tuple[Optional[str], Optional[str]]:
 
 
 def _get(path: str, auth: Optional[Tuple[str, str]]) -> Tuple[int, Any]:
-    url = f"{FT_URL}{path}"
+    url = f"{ft_base_url()}{path}"
     try:
         r = requests.get(url, auth=auth, timeout=_TIMEOUT)
         sc = int(r.status_code)
@@ -61,7 +72,7 @@ def snapshot(force: bool = False) -> Dict[str, Any]:
 
     out: Dict[str, Any] = {
         "ts": now,
-        "url": FT_URL,
+        "url": ft_base_url(),
         "ok": False,
         "auth_ok": False,
         "error": "",

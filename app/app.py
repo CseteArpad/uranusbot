@@ -1,5 +1,7 @@
 import json
 import os
+import execution_policy
+import ft_endpoint
 import freqtrade_ui
 import tempfile
 import hashlib
@@ -544,30 +546,15 @@ def load_state_view() -> dict:
     pair = view.get("pair") or "XRP/USDC"
     base_symbol = pair.split("/")[0] if "/" in pair else None
 
-    ft_url = None
-    try:
-        ft_url = (ft.get("url") if isinstance(ft, dict) else None)
-    except Exception:
-        ft_url = None
-    if not ft_url:
-        try:
-            ft_url = (state.get("ft") or {}).get("url")
-        except Exception:
-            ft_url = None
-    if not ft_url:
-        try:
-            ft_url = ((state.get("meta") or {}).get("ft") or {}).get("base_url")
-        except Exception:
-            ft_url = None
-    if not ft_url:
-        try:
-            cfg2 = read_json(FREQTRADE_CONFIG_PATH, default={})
-            api2 = (cfg2.get("api_server") or {})
-            host = api2.get("listen_ip_address") or "127.0.0.1"
-            port = api2.get("listen_port") or 8090
-            ft_url = f"http://{host}:{port}"
-        except Exception:
-            ft_url = "http://127.0.0.1:8090"
+    # U-2B (Patch B): egyetlen kanonikus Freqtrade-authority.
+    #
+    # A korábbi lánc a state.json-ból (`state["ft"]["url"]`,
+    # `state["meta"]["ft"]["base_url"]`) is elfogadott végpontot, majd négy
+    # különböző fallbackon át jutott el a 8090-hez. Ez két bajt okozott:
+    # a state konfigurációs authorityvé vált, és ugyanabban a processzben
+    # eltérhetett attól a címtől, amit a `freqtrade_ui` használt (U-2A: 8017).
+    # Innentől mindkét fogyasztó ugyanazt a feloldót hívja.
+    ft_url = ft_endpoint.canonical_ft_url()
 
     view["ft_base_url"] = ft_url
 
@@ -910,18 +897,25 @@ def bool_to_env(value: bool) -> str:
 
 
 def read_trading_settings():
+    # U-2B (Patch A): a végrehajtási alapértelmezés fail-safe.
+    #
+    # Korábban itt `execution_enabled=True` és `execution_log_only=False`
+    # állt. Mivel a production drop-in EGYETLEN execution-flaget sem tartalmaz
+    # (U-2A lelet), ezek az alapértelmezések túlélték a lenti felülírást, és a
+    # UI egy tetszőleges „Mentés”-sel `EXECUTION_ENABLED=1`-et írt volna a
+    # runner drop-inbe. A kanonikus értékek innentől egy helyen élnek:
+    # `execution_policy` – ugyanabból olvas a runner is.
     cfg = {
         "tick_seconds": 2.0,
         "pair": "XRP/USDC",
         "timeframe": "1m",
         "limit": 5,
-        "execution_enabled": True,
-        "execution_log_only": False,
+        **execution_policy.safe_settings_defaults(),
         "buy_lock_ttl_sec": 180,
         "kill_switch": False,
         "max_trades_per_day": 20,
         "daily_loss_cap_pct": 5.0,
-        "ft_url": "http://127.0.0.1:8090",
+        "ft_url": ft_endpoint.CANONICAL_FT_URL,
 
         "std_sell_enabled": True,
         "std_sell_pct": 1.0,
@@ -1376,8 +1370,18 @@ def api_save_settings():
             "pair": str(data.get("pair")).strip(),
             "timeframe": str(data.get("timeframe")).strip(),
             "limit": int(float(data.get("limit"))),
-            "execution_enabled": bool(data.get("execution_enabled")),
-            "execution_log_only": bool(data.get("execution_log_only")),
+            # U-2B (Patch A): fail-safe bool-értelmezés. A puszta `bool()` a
+            # `"false"` STRINGET is igaznak látta volna; a `coerce_bool`
+            # kizárólag explicit igaz tokenre ad True-t, és hiányzó értéknél a
+            # tiltó irányú alapértelmezésre esik vissza.
+            "execution_enabled": execution_policy.coerce_bool(
+                data.get("execution_enabled"),
+                execution_policy.EXECUTION_ENABLED_DEFAULT,
+            ),
+            "execution_log_only": execution_policy.coerce_bool(
+                data.get("execution_log_only"),
+                execution_policy.EXECUTION_LOG_ONLY_DEFAULT,
+            ),
             "buy_lock_ttl_sec": int(float(data.get("buy_lock_ttl_sec"))),
             "kill_switch": bool(data.get("kill_switch")),
             "max_trades_per_day": int(float(data.get("max_trades_per_day"))),
