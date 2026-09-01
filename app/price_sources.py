@@ -18,9 +18,17 @@ from typing import Dict, Optional
 #  Exchange választás:
 #    1. explicit `exchange=` argumentum
 #    2. URANUS_EXCHANGE vagy EXCHANGE_NAME környezeti változó
-#    3. default: "binance" (örökölt viselkedés)
+#    3. default: DEFAULT_EXCHANGE
 #
 #  Hiba esetén ExchangeError / TickerFetchError propagál (nincs csendes nyelés).
+#
+#  2026-09-01 (tulajdonosi döntés, OKX_SPOT_ONLY): az alapértelmezett ár-forrás
+#  "binance" -> "okx". Indok: ez a modul PIACI ADATOT szolgáltat, nem hajt végre
+#  ordert, ezért a Binance-tiltás közvetlenül nem érinti – de az alapértelmezés
+#  ne mutasson más tőzsdére, mint ahol a bot kereskedik. Egy OKX-en kereskedő
+#  bot Binance-árat használó alapértelmezése csendes bázis-eltérést okozna.
+#  A Binance továbbra is explicit kérhető (`exchange="binance"`) történeti és
+#  kutatási célra: BINANCE_AS_RESEARCH_PROVENANCE = ALLOWED.
 # =========================
 
 try:  # package import (repo gyökér a sys.path-on, pl. pytest)
@@ -28,7 +36,7 @@ try:  # package import (repo gyökér a sys.path-on, pl. pytest)
 except ImportError:  # flat import mód (app/ a sys.path-on, legacy futtatás)
     from exchange.manager import get_exchange_adapter  # type: ignore
 
-DEFAULT_EXCHANGE = "binance"
+DEFAULT_EXCHANGE = "okx"
 
 
 def _resolve_exchange_name(exchange: Optional[str] = None) -> str:

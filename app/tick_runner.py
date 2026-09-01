@@ -32,6 +32,11 @@ import execution_policy
 # kommunikációs hibája soha nem jelenthet FLAT-et.
 import position_authority
 
+# U-5 (tulajdonosi döntés, 2026-09-01): OKX_SPOT_ONLY végrehajtási politika.
+# A Binance éles végrehajtás véglegesen kivezetve; a helyszín-kapu modul-
+# konstans, env-ből nem kapcsolható vissza.
+import execution_venue_policy
+
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -1848,7 +1853,35 @@ def run_once() -> tuple[bool, float | None, dict]:
         return False, last_close, decision
 
 
+def startup_venue_guard(config: dict | None = None, env: Any = None) -> execution_venue_policy.StartupVerdict:
+    """
+    Production identity + helyszín-kapu a tick-hurok ELŐTT.
+
+    Az invariáns (tulajdonosi döntés, 2026-09-01)::
+
+        BOT = URANUS · EXECUTION_VENUE = OKX · MARKET_TYPE = SPOT
+        LIVE_AUTHORIZATION = explicit
+
+    Bármelyik eltérése esetén a runner **el sem indul**. A verdiktet a hívó
+    (``main_loop``) váltja kilépéssé; ez a függvény csak kiértékel és naplóz,
+    hogy tesztelhető maradjon.
+    """
+    if config is None:
+        config = execution_venue_policy.load_ft_config()
+    verdict = execution_venue_policy.evaluate_startup(config, env)
+    log(f"venue_policy {verdict.log_line()}")
+    return verdict
+
+
 def main_loop() -> None:
+    verdict = startup_venue_guard()
+    if not verdict.allowed:
+        log(
+            "STARTUP REFUSED: URANUS_EXECUTION_VENUE_POLICY=OKX_SPOT_ONLY, "
+            "BINANCE_EXECUTION_ALLOWED=NO. The tick loop will not start."
+        )
+        raise SystemExit(execution_venue_policy.EXIT_STARTUP_REFUSED)
+
     enabled0, log_only0, _confirm0 = _runtime_exec_flags()
     log(
         f"started ({TICK_SECONDS:.1f}s tick, Freqtrade -> state.json, auth={'on' if (FT_USERNAME and FT_PASSWORD) else 'off'}, "

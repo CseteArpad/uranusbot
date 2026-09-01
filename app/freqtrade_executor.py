@@ -6,6 +6,11 @@ import urllib.error
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Tuple
 
+try:  # package import (pytest, repo gyökér a sys.path-on)
+    from app import execution_venue_policy  # type: ignore
+except ImportError:  # flat import (production runner)
+    import execution_venue_policy  # type: ignore
+
 
 @dataclass
 class ExecResult:
@@ -151,7 +156,46 @@ class FreqtradeExecutor:
 
         return None
 
+    def _venue_refusal(self, action: str) -> Optional[ExecResult]:
+        """
+        Helyszín-kapu közvetlenül az order-küldés előtt (mélységi védelem).
+
+        Az indítási guard (``venue_preflight`` / ``tick_runner.startup_venue_guard``)
+        már lefutott, de az indulás óta a config változhatott. Egy order-küldő
+        útnak **önmagában** kell bizonyítania, hogy engedélyezett helyszínen jár –
+        nem támaszkodhat arra, hogy valaki más korábban ellenőrizte.
+
+        A helyszínt ugyanabból az egyetlen forrásból (a Freqtrade ``config.json``)
+        oldjuk fel, amelyből a Freqtrade maga is dolgozik, hogy ne lehessen
+        elcsúszás a kapu és a valóság között.
+
+        Returns:
+            ``None``, ha az order elküldhető; egyébként a kész elutasító
+            ``ExecResult``.
+        """
+        config = execution_venue_policy.load_ft_config()
+        exchange = (config or {}).get("exchange")
+        venue = exchange.get("name") if isinstance(exchange, dict) else None
+        dry_run = bool((config or {}).get("dry_run", False))
+
+        try:
+            execution_venue_policy.assert_live_execution_allowed(
+                venue, dry_run=dry_run, context=action
+            )
+        except execution_venue_policy.ExecutionVenueForbidden as exc:
+            return ExecResult(
+                ok=False,
+                action=action,
+                detail=f"venue_policy_refused:{exc.verdict.code}",
+                response=exc.verdict.as_dict(),
+            )
+        return None
+
     def force_enter(self, pair: Optional[str] = None) -> ExecResult:
+        refusal = self._venue_refusal("FORCEENTER")
+        if refusal is not None:
+            return refusal
+
         pair = pair or self.pair
         if not pair:
             return ExecResult(False, "FORCEENTER", "pair_missing")
@@ -164,6 +208,10 @@ class FreqtradeExecutor:
         return ExecResult(ok=ok, action="FORCEENTER", detail="ok" if ok else "forceenter_failed", http_status=code, response=body)
 
     def force_exit(self, pair: Optional[str] = None) -> ExecResult:
+        refusal = self._venue_refusal("FORCEEXIT")
+        if refusal is not None:
+            return refusal
+
         pair = pair or self.pair
         if not pair:
             return ExecResult(False, "FORCEEXIT", "pair_missing")

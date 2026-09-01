@@ -1,9 +1,28 @@
 """
-Uranus Exchange Layer – Binance adapter (SKELETON).
+Uranus Exchange Layer – Binance adapter, **MARKET DATA / PROVENANCE ONLY**.
 
-FÁZIS 7.5.2: hálózati logika NINCS, éles kapcsolat NINCS.
-A meglévő Binance LIVE működést (price_sources.py, binance_wallet.py,
-binance_spot_rest.py) ez a modul NEM érinti – azok átterelése FÁZIS 7.5.3.
+Tulajdonosi architekturális döntés (2026-09-01)::
+
+    BINANCE_AS_RESEARCH_PROVENANCE = ALLOWED
+    BINANCE_AS_LIVE_EXECUTION      = FORBIDDEN
+
+Ez az adapter **megmarad**, mert a Binance továbbra is legitim publikus
+ár- és történeti adatforrás, és a korábbi kutatás reprodukálhatóságához
+szükséges. Amit **véglegesen elveszít**, az a rendelési felület.
+
+Miért nem elég a korábbi ``NotImplementedError``
+------------------------------------------------
+A ``create_order``/``cancel_order``/``convert_dust`` korábban „FÁZIS 7.5.3-ban
+implementálandó” skeletonként állt itt. Ez **nyitva hagyott ajtó** volt: egy
+jövőbeli fejlesztő jóhiszeműen kitölthette volna őket, és ezzel csendben
+visszaállította volna az éles Binance végrehajtást.
+
+Ezért ezek most nem „még nem implementált”, hanem ``ExecutionVenueForbidden``
+kivételt dobó, **szándékosan lezárt** metódusok, és a ``CAPABILITIES`` is
+``supports_market_orders=False``/``supports_limit_orders=False``-ra vált – a
+képesség-alapú hívó kód így már a próbálkozás előtt tudja, hogy itt nincs
+rendelési út. Az újranyitás csak kódváltoztatással, az
+``execution_venue_policy`` módosításával és külön review-val lehetséges.
 """
 from __future__ import annotations
 
@@ -16,23 +35,50 @@ from .base import ExchangeAdapter
 from .capabilities import ExchangeCapabilities
 from .exceptions import TickerFetchError
 
+try:  # package import (pytest, repo gyökér a sys.path-on)
+    from app import execution_venue_policy  # type: ignore
+except ImportError:  # flat import (production runner)
+    import execution_venue_policy  # type: ignore
+
 BINANCE_BASE_URL = "https://api.binance.com"
 REQUEST_TIMEOUT = 10
 
 _SKELETON_MSG = "BinanceAdapter.{method} not implemented yet (FÁZIS 7.5.3)"
 
+#: A rendelési felület nem „hiányzik”, hanem KIVEZETVE van. Ez az üzenet
+#: szándékosan más, mint a skeleton-üzenet, hogy a napló megkülönböztesse
+#: a „még nincs kész”-t a „soha többé”-től.
+_RETIRED_MSG = (
+    "BinanceAdapter.{method} is PERMANENTLY RETIRED (owner decision 2026-09-01: "
+    "URANUS_EXECUTION_VENUE_POLICY=OKX_SPOT_ONLY). Binance remains available for "
+    "market data and research provenance only."
+)
+
+
+def _refuse(method: str) -> "execution_venue_policy.ExecutionVenueForbidden":
+    return execution_venue_policy.ExecutionVenueForbidden(
+        execution_venue_policy.StartupVerdict(
+            allowed=False,
+            code=execution_venue_policy.REFUSE_VENUE_RETIRED,
+            reason=_RETIRED_MSG.format(method=method),
+            venue="binance",
+            findings=(execution_venue_policy.REFUSE_VENUE_RETIRED,),
+        )
+    )
+
 
 class BinanceAdapter(ExchangeAdapter):
     name = "binance"
 
+    #: Rendelési képességek KIKAPCSOLVA – lásd a modul docstringjét.
     CAPABILITIES = ExchangeCapabilities(
         supports_spot=True,
         supports_margin=False,
         supports_public_ohlcv=True,
         supports_balance=True,
-        supports_market_orders=True,
-        supports_limit_orders=True,
-        supports_dust_conversion=True,
+        supports_market_orders=False,
+        supports_limit_orders=False,
+        supports_dust_conversion=False,
     )
 
     @property
@@ -95,6 +141,12 @@ class BinanceAdapter(ExchangeAdapter):
     def get_balances(self) -> Dict[str, Dict[str, float]]:
         raise NotImplementedError(_SKELETON_MSG.format(method="get_balances"))
 
+    # -- rendelési felület: VÉGLEGESEN KIVEZETVE --------------------------
+    #
+    # Ezeket NE implementáld. Ha valaha mégis szükség lenne rá, az nem itt
+    # kezdődik, hanem az `execution_venue_policy` megváltoztatásával és külön
+    # tulajdonosi döntéssel.
+
     def create_order(
         self,
         pair: str,
@@ -103,10 +155,10 @@ class BinanceAdapter(ExchangeAdapter):
         amount: float,
         price: Optional[float] = None,
     ) -> Dict[str, Any]:
-        raise NotImplementedError(_SKELETON_MSG.format(method="create_order"))
+        raise _refuse("create_order")
 
     def cancel_order(self, order_id: str, pair: Optional[str] = None) -> Dict[str, Any]:
-        raise NotImplementedError(_SKELETON_MSG.format(method="cancel_order"))
+        raise _refuse("cancel_order")
 
     def convert_dust(self, assets: List[str]) -> Dict[str, Any]:
-        raise NotImplementedError(_SKELETON_MSG.format(method="convert_dust"))
+        raise _refuse("convert_dust")

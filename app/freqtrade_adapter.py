@@ -6,6 +6,11 @@ import urllib.request
 import urllib.error
 from typing import Any, Dict, Optional, Tuple
 
+try:  # package import (pytest, repo gyökér a sys.path-on)
+    from app import execution_venue_policy  # type: ignore
+except ImportError:  # flat import (production runner)
+    import execution_venue_policy  # type: ignore
+
 # =========================
 # Logging
 # =========================
@@ -150,11 +155,45 @@ def get_in_position(*args, **kwargs) -> bool:
 # =========================
 # Trading helpers
 # =========================
+def _venue_refusal(action: str) -> Optional[Dict[str, Any]]:
+    """
+    Helyszín-kapu az adapter order-útján (mélységi védelem).
+
+    Ez a modul az ``executor.py`` által dinamikusan importált MÁSODIK order-út
+    (``/forcebuy`` és ``/forcesell``). Saját kapu kell bele: ha csak a
+    ``freqtrade_executor`` lenne védve, ez az út megkerülné a politikát.
+
+    Returns:
+        ``None``, ha az order elküldhető; egyébként a kész elutasító válasz-dict.
+    """
+    config = execution_venue_policy.load_ft_config()
+    exchange = (config or {}).get("exchange")
+    venue = exchange.get("name") if isinstance(exchange, dict) else None
+    dry_run = bool((config or {}).get("dry_run", False))
+
+    try:
+        execution_venue_policy.assert_live_execution_allowed(
+            venue, dry_run=dry_run, context=action
+        )
+    except execution_venue_policy.ExecutionVenueForbidden as exc:
+        log.error("%s refused by venue policy: %s", action, exc.verdict.log_line())
+        return {
+            "ok": False,
+            "status": f"venue_policy_refused:{exc.verdict.code}",
+            "venue_policy": exc.verdict.as_dict(),
+        }
+    return None
+
+
 def _forcebuy(pair: Optional[str] = None, amount: Optional[float] = None, price: Optional[float] = None, timeout: float = 8.0, **kwargs) -> Dict[str, Any]:
     """
     Best-effort wrapper for Freqtrade forcebuy.
     Payload keys vary by version; we send the common ones.
     """
+    refusal = _venue_refusal("FORCEBUY")
+    if refusal is not None:
+        return refusal
+
     payload: Dict[str, Any] = {}
     if pair:
         payload["pair"] = pair
@@ -178,6 +217,10 @@ def _forcesell(pair: Optional[str] = None, trade_id: Optional[Any] = None, timeo
     Best-effort wrapper for Freqtrade forcesell.
     Some versions prefer tradeid/trade_id; we support both.
     """
+    refusal = _venue_refusal("FORCESELL")
+    if refusal is not None:
+        return refusal
+
     payload: Dict[str, Any] = {}
 
     if trade_id is None:

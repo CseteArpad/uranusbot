@@ -94,11 +94,23 @@ class TestPriceSourcesFacade:
         patch_adapter(FakeAdapter(price=1.23))
         assert price_sources.get_price("XRP/USDC") == pytest.approx(1.23)
 
-    def test_default_exchange_is_binance(self, patch_adapter, monkeypatch):
+    def test_default_exchange_is_okx(self, patch_adapter, monkeypatch):
+        """
+        OKX_SPOT_ONLY (2026-09-01): az alapértelmezett ár-forrás ugyanaz a
+        tőzsde, ahol a bot kereskedik. Ez nem csak konstans-csere: egy
+        OKX-en kereskedő bot Binance-alapértelmezésű ára csendes
+        bázis-eltérést okozna a döntési szintekben.
+        """
         monkeypatch.delenv("URANUS_EXCHANGE", raising=False)
         monkeypatch.delenv("EXCHANGE_NAME", raising=False)
-        requested = patch_adapter(FakeAdapter())
+        requested = patch_adapter(FakeAdapter(name="okx"))
         price_sources.get_tick("XRP/USDC")
+        assert requested == ["okx"]
+
+    def test_binance_still_available_as_explicit_data_source(self, patch_adapter):
+        """BINANCE_AS_RESEARCH_PROVENANCE = ALLOWED - explicit kérésre elérhető."""
+        requested = patch_adapter(FakeAdapter(name="binance"))
+        price_sources.get_tick("XRP/USDC", exchange="binance")
         assert requested == ["binance"]
 
     def test_explicit_okx_argument(self, patch_adapter):
